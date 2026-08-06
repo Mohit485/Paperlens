@@ -1,39 +1,44 @@
-# VisualRAG — Research Paper Companion
+# VisualRAG
 
-A multimodal RAG (Retrieval-Augmented Generation) system that answers questions across PDFs and diagram images — including content that lives inside figures, tables, and equations, not just plain extracted text.
+**A multimodal Research Paper Companion.** Upload your papers, ask questions in plain language, and get answers grounded in what's actually in them - including the parts most "chat with your PDF" tools quietly ignore: figures, tables, and equations.
 
-Built with LangChain, ChromaDB, OpenCLIP, Groq, FastAPI, Gradio, and Docker.
+---
+
+## Why this exists
+
+Most tools that let you "chat with a PDF" only ever read the extracted text layer. That works fine for prose, but it means anything that actually lives in a diagram, a chart, or an equation gets silently dropped before the model ever sees it - you end up asking about a figure and getting an answer synthesized from its caption, not from the figure itself.
+
+This project was built to fix that specific gap, and it went through a real redesign to get there. The first version tried to make *every* page semantically searchable by image, embedding every rendered page through CLIP alongside the text. It worked, but it was solving a problem nobody actually has that often — in practice, people ask about figures by naming them directly ("explain the diagram on page 4"), not by vague visual similarity. So the project was rebuilt around that reality: plain text search for general questions, and a page's image is only ever rendered - on demand, then cached - the moment a question actually references it. Cheaper, faster, and closer to how the tool is actually used.
 
 ---
 
 ## Demo
 
-<!-- Replace with real screenshots after your first run — see filenames below -->
-![Upload tab](assets/upload.png)
-- `upload.png` — the upload tab right after a successful file add
-  
-![Ask tab](assets/asktab.png)
-- `ask.png` — the ask tab with a real question and grounded answer showing
+<!-- Capture these after your next run and drop them in assets/screenshots/ -->
+![Manage Documents sidebar](assets/screenshots/manage.png)
+![Ask a Question — chat view](assets/screenshots/ask.png)
 
+A short screen recording (upload a paper → ask a page-specific question → get a grounded answer with sources) converted to a GIF is worth more here than any amount of written description — worth doing before this goes on a resume.
 
 ---
 
 ## Architecture
 
-![Architecture](assets/architecture.svg)
+![Architecture](assets/architecture_v2.svg)
 
-Two pipelines share one vector database:
-- **Ingestion** turns every PDF page into a text chunk and a page image, embeds both with CLIP, and stores them in ChromaDB.
-- **Query** embeds the user's question with the same CLIP model, retrieves the closest matches from ChromaDB, and hands them to Groq's LLM to write a grounded answer.
+Two independent paths share one knowledge base:
+
+- **No specific page mentioned** → the question is embedded and matched against stored text chunks (semantic search), and Groq's text model answers from the closest matches.
+- **A specific page is named** ("page 4", "the figure on page 12") → that exact page is rendered from the original PDF (or pulled from cache if it's been asked about before) and sent, image and all, to a vision-capable Groq model — with its "thinking mode" turned on specifically for math and structural reasoning.
 
 ---
 
 ## How It Works
 
-1. **Ingest** — a PDF page becomes (a) a text chunk and (b) a rendered page image. CLIP embeds both into the same vector space, and ChromaDB stores them. Add files through the browser UI (one at a time) or in bulk with `python ingest.py`.
-2. **Ask** — the question is embedded the same way; ChromaDB returns the closest matching text and/or images; Groq's LLM writes an answer grounded in exactly that retrieved material, with sources cited. If any retrieved match is an image, a vision-capable model is used automatically instead of a text-only one.
-3. **Interface** — a Gradio UI (upload tab + ask tab) is mounted directly inside the FastAPI app, so one command starts everything. The underlying `/ask` and `/ingest` endpoints are also independently testable at `/docs`.
-4. **Privacy** — files uploaded through the app are processed and then deleted. Only their embeddings (and, for images, a base64 copy) remain in `chroma_db/`. Files you place yourself in `data/pdfs/` or `data/images/` for bulk `ingest.py` runs are left untouched, since you put them there intentionally.
+1. **Ingest** — every PDF page's text is extracted and embedded (`sentence-transformers`, running locally on CPU) and stored in ChromaDB. The original PDF itself is kept permanently on disk — deliberately, so a page can still be rendered on demand later, even long after upload.
+2. **Ask** — the question is checked for an explicit page/paper reference first. If found, that page gets rendered (or reused from cache) and reasoned over visually. If not, it falls back to semantic search over the stored text.
+3. **Manage** — uploaded papers can be listed and deleted at any time; deleting a paper cleans up its text entries, any cached page renders, and the original file together, not just one of the three.
+4. **Interface** — a Streamlit front end (`app.py`) talks to a FastAPI backend (`api.py`) over plain HTTP — two separate processes, the same way a real product's frontend and backend are typically split.
 
 ---
 
@@ -41,11 +46,11 @@ Two pipelines share one vector database:
 
 | Layer | Tool |
 |---|---|
-| Embeddings | OpenCLIP (`ViT-B-32`) via LangChain |
+| Embeddings | `sentence-transformers` (all-MiniLM-L6-v2) |
 | Vector database | ChromaDB |
 | Generation | Groq API (text + vision models) |
 | Backend | FastAPI |
-| Frontend | Gradio |
+| Frontend | Streamlit |
 | PDF processing | PyMuPDF |
 | Containerization | Docker |
 
@@ -69,53 +74,67 @@ Get a free Groq API key (no credit card) at https://console.groq.com/keys, then 
 
 ## Usage
 
+Two terminals, running at the same time:
+
 ```bash
 uvicorn api:app --reload
 ```
+```bash
+streamlit run app.py
+```
 
-Open **http://127.0.0.1:8000/ui** — upload PDFs/images on the first tab, ask questions on the second.
+`run.bat` / `start.sh` are included as shortcuts to launch both at once, if you'd rather not manage two terminals by hand.
 
-Other ways to interact with it:
-- `python ingest.py` — bulk-process every file already sitting in `data/pdfs/` and `data/images/`, instead of uploading one at a time.
-- `http://127.0.0.1:8000/docs` — the raw API, testable directly from the browser (or curl/Postman), independent of the UI.
+The raw API is also independently testable at `http://127.0.0.1:8000/docs`, separate from the UI.
 
 ---
 
 ## Project Structure
 
 ```
-VisualRAG/
-├── rag_core.py         # embeddings, vector store, search, Groq generation
-├── ingest.py            # bulk-add PDFs/images from data/ folders; also used by api.py and app_ui.py
-├── api.py               # FastAPI backend (/ask, /ingest) + mounts the Gradio UI at /ui
-├── app_ui.py             # Gradio interface: upload tab + ask tab
+PaperLens/
+├── rag_core.py          # embeddings, ChromaDB, the two answer paths, Groq calls
+├── page_lookup.py         # on-demand page rendering + caching
+├── ingest.py               # saves uploaded PDFs permanently, extracts + embeds text
+├── api.py                   # FastAPI backend (/ingest, /ask, /documents)
+├── app.py                     # primary UI — sidebar + chat, dark mode
+├── streamlit_app.py             # earlier tabbed UI, kept for reference
 ├── requirements.txt
 ├── .env.example
-├── Dockerfile             # containerizes the API
-├── data/
-│   ├── pdfs/                # your own PDF library for bulk ingest.py runs
-│   ├── images/                # your own diagrams for bulk ingest.py runs
-│   └── rendered_pages/         # scratch space, auto-cleaned after each page is embedded
-└── chroma_db/                  # the persistent vector database (git-ignored)
+├── Dockerfile / .dockerignore     # containerizes the API
+├── HF_SPACE_README.md               # config block for Hugging Face Spaces, if deployed later
+├── assets/
+│   ├── architecture_v2.svg
+│   └── screenshots/
+└── data/
+    ├── papers/                        # permanent PDF storage
+    └── rendered_pages/                  # cached on-demand page renders
 ```
 
 ---
 
-## Future Scope
+## A few things worth knowing about how this was built
 
-- YouTube video ingestion (transcript + slide-change keyframes), scoped out of v1 to ship faster
-- Smarter text chunking (`RecursiveCharacterTextSplitter`) instead of one chunk per page
-- OCR fallback for scanned/image-only PDFs
-- Multi-user support with per-user collections instead of a single shared database
+This wasn't a straight line from idea to finished product, and I think that's worth being upfront about rather than presenting it as if it were. A handful of real production bugs turned up along the way and got fixed one at a time — a page-lookup path that silently never fired because a function was missing its `return` statement; an inverted file-existence check that caused the opposite of the intended behavior; a `base64` encode/decode mix-up that would have crashed the very next successful run. None of them were caught by assumption — each one was traced with a small isolated test that removed every other moving part (server, UI, everything) until only the actual broken line was left standing. That process is honestly a bigger part of what this project demonstrates than any single feature is.
 
 ---
 
 ## Limitations
 
-- Text extraction relies on the PDF's built-in text layer — scanned/image-only PDFs return the page-image side only, no text side.
-- Each PDF page is treated as a single chunk; very dense pages could exceed what's useful in one retrieval unit.
-- Groq's available model names change fairly often — if generation fails with a "model not found" error, update `GROQ_TEXT_MODEL` / `GROQ_VISION_MODEL` in `.env` (see https://console.groq.com/docs/models).
-- Runs as a single local instance; not built for concurrent multi-user production load.
+- Text extraction relies on the PDF's built-in text layer — scanned/image-only PDFs return no text for those pages, only whatever the page-image path can work with.
+- Page-lookup requires an explicit page number *and* an identifiable paper. If more than one paper is stored and neither is named in the question, it says so directly rather than guessing.
+- Figure and table *numbers* aren't mapped to pages on their own — "explain Figure 3" only works reliably if a page number is also mentioned. Resolving figure numbers to pages automatically would need a caption-detection step during ingestion, which isn't built yet.
+- Dense tables and small print can still be misread — page images are deliberately shrunk before being sent to the model to control token cost, and that's a real trade-off against fine detail, not a fully solved problem.
+- Questions that require synthesizing across an entire document ("how many equations are in this paper") aren't a good fit for this architecture — retrieval only ever sees a handful of the most relevant chunks, never the whole document at once.
+- Runs locally, single-user, no authentication — this is a portfolio/demo project, not a multi-tenant production service.
+- Groq's available model names shift over time; if generation ever fails with a "model not found" error, it's a one-line fix in `.env`, not a code change.
+
+---
+
+## Future Scope
+
+- **YouTube video support.** Scoped out early to ship the PDF path first. The interesting version of this isn't just transcript search (tools like NotebookLM already do that) — it's also pulling keyframes at slide/scene changes, so on-screen equations and diagrams during a talk are searchable too, not just what was said out loud.
+- **GitHub repository linking.** A lot of papers link to an official code implementation. Being able to ask "how is the loss function in Section 3 actually implemented?" and have it search the linked repo alongside the paper itself would turn this from a reading tool into something closer to a real research workflow companion.
 
 ---
 
