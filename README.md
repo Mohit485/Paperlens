@@ -15,8 +15,8 @@ This project was built to fix that specific gap, and it went through a real rede
 ## Demo
 
 <!-- Capture these after your next run and drop them in assets/screenshots/ -->
-![Manage Documents sidebar](assets/screenshots/manage.png)
-![Ask a Question — chat view](assets/screenshots/ask.png)
+![Manage Documents sidebar](assets/ss_manage.png)
+![Ask a Question — chat view](assets/ss_fig.png)
 
 A short screen recording (upload a paper → ask a page-specific question → get a grounded answer with sources) converted to a GIF is worth more here than any amount of written description — worth doing before this goes on a resume.
 
