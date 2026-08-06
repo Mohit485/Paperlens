@@ -1,8 +1,8 @@
 langchain
 langchain-community
-langchain-experimental
+langchain-chroma
 chromadb
-open-clip-torch
+sentence-transformers
 torch
 pillow
 pymupdf
@@ -10,5 +10,6 @@ groq
 fastapi
 uvicorn
 python-multipart
-gradio
 python-dotenv
+requests
+streamlit

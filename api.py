@@ -1,14 +1,11 @@
+import os
+import tempfile
 from fastapi import FastAPI, UploadFile, File
-from pydantic import BaseModel #Pydantic's BaseModel is a way of describing "what shape of data do I expect to receive".
-from ragcore import ask
-import gradio as gr
-import os 
-import shutil
+from pydantic import BaseModel
+ 
+from ragcore import ask, list_sources, delete_source
+from ingest import process_pdf
 
-
-from ragcore import ask
-from ingest import process_pdf, process_image, PDF_FOLDER, IMAGE_FOLDER
-from app import demo  # the Gradio Blocks interface defined in app_ui.py
 
 app= FastAPI(title= "VisualRAG")
 class Question(BaseModel):
@@ -19,46 +16,34 @@ def health_check():
     # A simple endpoint just to confirm the server is alive and reachable.
     return {"status": "ok", "message": "VisualRAG is running"}
 
-@app.post("/ask")
-def ask_question(payload: Question):
-    """
-    Receives a question, runs it through our RAG pipeline (search + Groq),
-    and returns the answer with sources.
-    """
-
-    result = ask(payload.question)
-    return result
 
 @app.post("/ingest")
-async def ingest_file(file: UploadFile = File(...)):
-    """Lets you add a file to the knowledge base through the raw API -- e.g.
-    from curl, Postman, or another program -- independent of the Gradio
-    UI"""
-    filename= file.filename
-    extension= filename.lower().split(".")[-1]
-    if extension== "pdf":
-        save_dir= PDF_FOLDER
-    elif extension== ("jpg", "png", "jpeg"):
-        save_dir= IMAGE_FOLDER
-    else:
-        return {"error": "Unsupported file type. Please upload a PDF, PNG, or JPG."}
-    os.makedirs(save_dir, exist_ok=True)
-    save_path = os.path.join(save_dir, filename)
-
-    with open(save_path, "wb") as buffer:
-        shutil.copyfileobj(file.file, buffer) # standard safe way to save an uploaded file
+async def ingest_files(file : UploadFile= File(...)):
+    """
+    Accepts one or more PDFs in a single request (Streamlit's uploader
+    will send multiple files this exact way once we build the UI).
+    """
+    if not file.filename.lower().endswith(".pdf"):
+        return {"filename": file.filename, "status": "skipped (not a PDF)"}
  
-    if extension == "pdf":
-        process_pdf(save_path)
-    else:
-        process_image(save_path)
-
-        
-    try:
-        os.remove(save_path)
-    except OSError:
-        pass
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+        tmp.write(await file.read())
+        tmp_path = tmp.name
  
-    return {"status": "success", "message": f"{filename} added to the knowledge base"}
+    process_pdf(tmp_path, file.filename)
+    os.remove(tmp_path)
+ 
+    return {"filename": file.filename, "status": "success"}
 
-app = gr.mount_gradio_app(app, demo, path="/ui")
+@app.post("/ask")
+def ask_question(payload: Question):
+    return ask(payload.question)
+
+@app.get("/documents")
+def get_documents():
+    return {"documents": list_sources()}
+
+@app.delete("/documents/{source}")
+def remove_document(source: str):
+    delete_source(source)
+    return {"status": "success", "message": f"'{source}' and everything derived from it has been removed"}

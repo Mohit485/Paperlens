@@ -1,81 +1,46 @@
-"""Run this file whenever you want to add new PDFs or images to your
-knowledge base
-It looks inside data/pdfs/ and data/images/, processes everything it finds,
-and saves the results into the chroma_db/ folder (created automatically the
-first time you run this)."""
+"""takes a newly uploaded PDF, saves a PERMANENT copy, and
+extracts + embeds its text one page at a time. Does NOT render any page
+images here -- that only happens later, on demand, the first time a
+question actually asks about a specific page (see page_lookup.py)."""
 
 import os
 import fitz # pdf rendering python library
-from ragcore import add_image, add_text
+import shutil
+from ragcore import add_text, clear_source_text 
+from page_lookup import paper_folder
 
-PDF_FOLDER = "data/pdfs"
-IMAGE_FOLDER = "data/images"
-RENDERED_PAGES_FOLDER = "data/rendered_pages"  # PDF pages get saved here as PNGs
+def process_pdf(temp_path, original_filename):
+    """
+    temp_path         -- where the uploaded file is currently sitting
+                          (a temporary location the caller gave us)
+    original_filename -- the name we want to remember this paper by,
+                          e.g. "depth_anything.pdf"
+    """
+    clear_source_text(original_filename)
+    # If this exact paper was already ingested before (e.g. you're re-uploading it), clear out its OLD text chunks first. Without this, every re-upload would just add more copies on top of the existing ones 
+    os.makedirs(paper_folder, exist_ok=True)
+    permanent_path= os.path.join(paper_folder, original_filename)
+    shutil.copy(temp_path, permanent_path)
 
-os.makedirs(RENDERED_PAGES_FOLDER, exist_ok= True)
-def process_pdf(pdf_path):
-    """
-    For every page in a PDF, we do TWO things:
-      1. Pull out the raw text and save it as a text chunk
-      2. Render the page as a PNG image and save it as an image chunk
-    """
-    filename = os.path.basename(pdf_path)
-    doc = fitz.open(pdf_path)
-    print(f"Processing {filename} ({len(doc)} pages)...")
+    doc = fitz.open(permanent_path)
+    print(f"Processing {original_filename} ({len(doc)} pages)...")
 
     for page_number in range(len(doc)):
-        page = doc[page_number]
-        #text side
-        text = page.get_text().strip()
-        if text:  # skip blank/near-empty pages (e.g. a title page with just a logo)
-            add_text(text=text, source=filename, page=page_number + 1)
-        # --- Image side ---
-        # dpi=150 is a good balance: sharp enough to read small labels
-        # inside a figure, but not so huge that it slows down CPU embedding.
-        pixmap = page.get_pixmap(dpi=150)
-        image_path = os.path.join(
-            RENDERED_PAGES_FOLDER, f"{filename}_page{page_number + 1}.png"
-        )
-        pixmap.save(image_path)
-        add_image(image_path=image_path, source=filename, page=page_number + 1)
-        try:
-            os.remove(image_path)
-        except OSError:
-            pass
- 
+        text= doc[page_number].get_text().strip()
+        if text:  # skip essentially blank pages (e.g. a title page with just a logo)
+            add_text(text=text, source=original_filename, page=page_number + 1)
+
     doc.close()
-    print(f"  -> done with {filename}")
-    doc.close()
-    print(f"  -> done with {filename}")
+    print(f"  -> done with {original_filename}")
 
-
-def process_image(image_path):
-# Adds a standalone image (e.g. a diagram screenshot you saved from a paper or slide) directly into the knowledge base. No text side exists
-    filename = os.path.basename(image_path)
-    add_image(image_path=image_path, source=filename, page="N/A")
-    print(f"Added image: {filename}")
-
-if __name__== "__main__":
-    found_anything = False
- 
-    if os.path.isdir(PDF_FOLDER):
-        for file in os.listdir(PDF_FOLDER):
-            if file.lower().endswith(".pdf"):
-                process_pdf(os.path.join(PDF_FOLDER, file))
-                found_anything = True
- 
-    if os.path.isdir(IMAGE_FOLDER):
-        for file in os.listdir(IMAGE_FOLDER):
-            if file.lower().endswith((".png", ".jpg", ".jpeg")):
-                process_image(os.path.join(IMAGE_FOLDER, file))
-                found_anything = True
-
-    if not found_anything:
-        print(
-            "No files found. Put some PDFs in data/pdfs/ and/or images in "
-            "data/images/, then run this script again."
-        )
+if __name__ == "__main__":
+    # This is now a secondary path -- normal usage is uploading through
+    # the API/website, which calls process_pdf() directly per file.
+    BULK_FOLDER = "data/bulk_upload"
+    if os.path.isdir(BULK_FOLDER):
+        for filename in os.listdir(BULK_FOLDER):
+            if filename.lower().endswith(".pdf"):
+                process_pdf(os.path.join(BULK_FOLDER, filename), filename)
     else:
-        print("\nAll done! Your knowledge base is saved in the chroma_db/ folder.")
- 
-
+        print(f"No {BULK_FOLDER}/ folder found. Nothing to do here -- "
+              f"upload PDFs through the API instead (see api.py).")
