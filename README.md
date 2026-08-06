@@ -24,7 +24,7 @@ A short screen recording (upload a paper → ask a page-specific question → ge
 
 ## Architecture
 
-![Architecture](assets/architecture_v2.svg)
+![Architecture](assets/architecture.svg)
 
 Two independent paths share one knowledge base:
 
