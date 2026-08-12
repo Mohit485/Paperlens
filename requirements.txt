@@ -8,8 +8,11 @@ pillow
 pymupdf
 groq
 fastapi
+pytesseract
 uvicorn
 python-multipart
 python-dotenv
 requests
 streamlit
+
+#Your README already states scanned/image-only PDFs return no text, since PyMuPDF's get_text() only reads an embedded text layer that doesn't exist on a scanned page. OCR (e.g., Tesseract, free and local) is the exact, natural fix: when get_text() comes back empty for a page, run OCR on that page's rendered image instead, so scanned pages stop being a dead end. Clean, well-scoped addition"""

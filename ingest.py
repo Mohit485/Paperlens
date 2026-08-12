@@ -4,8 +4,11 @@ images here -- that only happens later, on demand, the first time a
 question actually asks about a specific page (see page_lookup.py)."""
 
 import os
+import io
+import pytesseract
 import fitz # pdf rendering python library
 import shutil
+from PIL import Image 
 from ragcore import add_text, clear_source_text 
 from page_lookup import paper_folder
 
@@ -27,6 +30,14 @@ def process_pdf(temp_path, original_filename):
 
     for page_number in range(len(doc)):
         text= doc[page_number].get_text().strip()
+        if not text:
+            pixmap= doc[page_number].get_pixmap(dpi=150)
+            image= Image.open(io.BytesIO(pixmap.tobytes()))
+            text= pytesseract.image_to_string(image).strip()  
+
+            print(f"[OCR debug] page {page_number + 1}: extracted {len(text)} characters")
+            print(f"[OCR debug] preview: {text[:150]!r}")      
+
         if text:  # skip essentially blank pages (e.g. a title page with just a logo)
             add_text(text=text, source=original_filename, page=page_number + 1)
 
