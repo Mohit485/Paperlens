@@ -1,0 +1,36 @@
+# No top-level "version:" key -- deprecated and ignored as of Compose
+# V2, current best practice is to omit it entirely.
+#
+# Run with: docker compose up --build
+# (space, not a hyphen -- the old standalone docker-compose binary is
+# unmaintained; "docker compose" is the current built-in command)
+
+services:
+  api:
+    build: ./api
+    ports:
+      - "8001:8000"
+    env_file:
+      - .env
+    volumes:
+      # Mounts your REAL local folders into the container, so data
+      # uploaded while running under Compose lands on your actual disk
+      # (and survives `docker compose down`), and anything already
+      # there locally is visible to the container immediately.
+      - ./data:/app/data
+      - ./chroma_db:/app/chroma_db
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "8501:8501"
+    environment: 
+      # THE key line that makes two containers able to find each
+      # other: "api" here is not a hostname on the real internet, it's
+      # the SERVICE NAME above. Compose runs an internal DNS that
+      # resolves that name to the api container's private IP,
+      # automatically -- 127.0.0.1 would NOT work here, since inside
+      # this container, 127.0.0.1 means "this container itself."
+      - API_URL=http://api:8000
+    depends_on:
+      - api
