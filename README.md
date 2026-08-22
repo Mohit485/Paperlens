@@ -9,8 +9,9 @@
 - **App:** [App URL](https://paperlens-app-569790627400.us-central1.run.app/)
 - **API docs:** [API URL](https://paperlens-api-569790627400.us-central1.run.app)/docs
 - **MCP endpoint:** [MCP URL](https://paperlens-api-569790627400.us-central1.run.app)/mcp — add to any MCP client (Cursor, Cline, Claude Desktop) to query your papers directly from an AI coding agent
+|![Interface](assets/paper.svg) |
 
-<!-- Drop a screenshot or short demo GIF here once captured -->
+| ![Paperlens interface](assets/paper.gif) |
 
 ---
 
@@ -40,7 +41,7 @@ The project went through a real redesign to get this right. The first version tr
 
 ## Architecture
 
-![Architecture](assets/architecture_v3.svg)
+![Architecture](assets/architecture_final.svg)
 
 ---
 
