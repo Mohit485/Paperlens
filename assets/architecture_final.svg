@@ -1,0 +1,91 @@
+<svg viewBox="0 0 1200 820" xmlns="http://www.w3.org/2000/svg" font-family="Segoe UI, Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="arrow" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L0,6 L8,3 z" fill="#64748b"/>
+    </marker>
+  </defs>
+
+  <rect width="1200" height="820" fill="#ffffff"/>
+  <text x="40" y="26" font-size="16" font-weight="700" fill="#1e293b">PaperLens — Architecture</text>
+
+  <!-- ============ ROW 0: Entry points ============ -->
+  <rect x="40" y="50" width="280" height="80" rx="10" fill="#ecfdf5" stroke="#059669" stroke-width="1.5"/>
+  <text x="180" y="82" text-anchor="middle" font-size="13" font-weight="700" fill="#065f46">Streamlit UI</text>
+  <text x="180" y="100" text-anchor="middle" font-size="11" fill="#065f46">(browser)</text>
+
+  <rect x="430" y="50" width="340" height="80" rx="10" fill="#eef2ff" stroke="#6366f1" stroke-width="1.5"/>
+  <text x="600" y="78" text-anchor="middle" font-size="13" font-weight="700" fill="#312e81">MCP Client</text>
+  <text x="600" y="96" text-anchor="middle" font-size="11" fill="#312e81">Cursor / Cline — Streamable HTTP</text>
+  <text x="600" y="112" text-anchor="middle" font-size="10" fill="#4338ca">(anyone, no setup beyond a URL)</text>
+
+  <rect x="880" y="50" width="280" height="80" rx="10" fill="#f8fafc" stroke="#94a3b8" stroke-width="1.5" stroke-dasharray="6,4"/>
+  <text x="1020" y="78" text-anchor="middle" font-size="13" font-weight="700" fill="#475569">MCP Client</text>
+  <text x="1020" y="96" text-anchor="middle" font-size="11" fill="#475569">Cursor — stdio (local only)</text>
+  <text x="1020" y="112" text-anchor="middle" font-size="10" fill="#64748b">(you, on your own machine)</text>
+
+  <line x1="180" y1="130" x2="180" y2="170" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <line x1="600" y1="130" x2="600" y2="170" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <text x="615" y="152" font-size="10" fill="#4338ca">/mcp</text>
+
+  <line x1="1020" y1="130" x2="1020" y2="170" stroke="#94a3b8" stroke-width="1.5" stroke-dasharray="5,4" marker-end="url(#arrow)"/>
+
+  <!-- ============ ROW 1: Google Cloud Run boundary ============ -->
+  <rect x="30" y="175" width="780" height="150" rx="12" fill="none" stroke="#38bdf8" stroke-width="1.5" stroke-dasharray="7,5"/>
+  <text x="48" y="197" font-size="12" font-weight="700" fill="#0284c7">Google Cloud Run</text>
+
+  <rect x="60" y="210" width="280" height="90" rx="10" fill="#ecfdf5" stroke="#059669" stroke-width="1.5"/>
+  <text x="200" y="240" text-anchor="middle" font-size="12" font-weight="700" fill="#065f46">app_docker</text>
+  <text x="200" y="258" text-anchor="middle" font-size="11" fill="#065f46">Streamlit container</text>
+  <text x="200" y="276" text-anchor="middle" font-size="10" fill="#059669">(no ML libraries — lean image)</text>
+
+  <rect x="430" y="210" width="340" height="90" rx="10" fill="#eef2ff" stroke="#6366f1" stroke-width="1.5"/>
+  <text x="600" y="236" text-anchor="middle" font-size="12" font-weight="700" fill="#312e81">api_docker</text>
+  <text x="600" y="254" text-anchor="middle" font-size="11" fill="#312e81">FastAPI — REST endpoints</text>
+  <text x="600" y="270" text-anchor="middle" font-size="11" fill="#312e81">+ MCP server mounted at /mcp</text>
+  <text x="600" y="288" text-anchor="middle" font-size="10" fill="#4338ca">(heavy ML deps live here only)</text>
+
+  <line x1="340" y1="255" x2="426" y2="255" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <text x="345" y="248" font-size="9.5" fill="#64748b">API_URL (HTTP)</text>
+
+  <!-- stdio local server, outside the cloud boundary -->
+  <rect x="880" y="210" width="280" height="90" rx="10" fill="#f8fafc" stroke="#94a3b8" stroke-width="1.5" stroke-dasharray="6,4"/>
+  <text x="1020" y="238" text-anchor="middle" font-size="12" font-weight="700" fill="#475569">mcp_server.py</text>
+  <text x="1020" y="256" text-anchor="middle" font-size="10.5" fill="#475569">launched directly by the agent</text>
+  <text x="1020" y="272" text-anchor="middle" font-size="10.5" fill="#475569">imports the same core logic below</text>
+  <text x="1020" y="288" text-anchor="middle" font-size="10" fill="#64748b">— never deployed anywhere</text>
+
+  <!-- ============ ROW 2: Core logic ============ -->
+  <line x1="600" y1="300" x2="600" y2="356" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <line x1="1020" y1="300" x2="640" y2="380" stroke="#94a3b8" stroke-width="1.3" stroke-dasharray="5,4"/>
+
+  <rect x="250" y="360" width="700" height="120" rx="10" fill="#fff7ed" stroke="#f97316" stroke-width="2"/>
+  <text x="600" y="386" text-anchor="middle" font-size="13" font-weight="700" fill="#7c2d12">Core Logic</text>
+  <text x="600" y="408" text-anchor="middle" font-size="11" fill="#7c2d12">ragcore.py — routes each question: page named → vision path,</text>
+  <text x="600" y="425" text-anchor="middle" font-size="11" fill="#7c2d12">2+ papers named → multi_paper.py, otherwise → semantic text search</text>
+  <text x="600" y="446" text-anchor="middle" font-size="10.5" fill="#9a3412">ingest.py (extract + OCR fallback + embed)  ·  page_lookup.py (render + cache on demand)</text>
+  <text x="600" y="464" text-anchor="middle" font-size="9.5" fill="#c2410c">same code, shared by BOTH the deployed API and the local stdio server above</text>
+
+  <!-- ============ ROW 3: Groq + Storage ============ -->
+  <line x1="450" y1="480" x2="380" y2="536" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <line x1="750" y1="480" x2="820" y2="536" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <rect x="230" y="540" width="300" height="90" rx="10" fill="#eef2ff" stroke="#6366f1" stroke-width="2"/>
+  <text x="380" y="570" text-anchor="middle" font-size="12" font-weight="700" fill="#312e81">Groq API</text>
+  <text x="380" y="590" text-anchor="middle" font-size="11" fill="#312e81">Text model + Vision model</text>
+  <text x="380" y="608" text-anchor="middle" font-size="10" fill="#4338ca">(vision uses "thinking mode" for math)</text>
+
+  <rect x="670" y="540" width="300" height="90" rx="10" fill="#f5f3ff" stroke="#7c3aed" stroke-width="2"/>
+  <text x="820" y="565" text-anchor="middle" font-size="12" font-weight="700" fill="#4c1d95">Storage</text>
+  <text x="820" y="584" text-anchor="middle" font-size="11" fill="#4c1d95">ChromaDB (text embeddings)</text>
+  <text x="820" y="601" text-anchor="middle" font-size="11" fill="#4c1d95">local papers/ + cached page renders</text>
+
+  <!-- ============ Legend ============ -->
+  <line x1="60" y1="670" x2="100" y2="670" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <text x="112" y="674" font-size="11" fill="#334155">Deployed / remote path</text>
+
+  <line x1="60" y1="695" x2="100" y2="695" stroke="#94a3b8" stroke-width="1.5" stroke-dasharray="5,4" marker-end="url(#arrow)"/>
+  <text x="112" y="699" font-size="11" fill="#334155">Local-only path (not deployed)</text>
+
+  <text x="40" y="750" font-size="11" fill="#94a3b8">PaperLens — one shared backend, three ways in: a browser UI, a remote MCP endpoint, and a local MCP process.</text>
+  <text x="40" y="768" font-size="11" fill="#94a3b8">Text search by default; page rendering only happens the moment a page is explicitly named.</text>
+</svg>
