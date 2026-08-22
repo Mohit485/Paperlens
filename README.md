@@ -1,44 +1,46 @@
-# VisualRAG
+# PaperLens
 
-**A multimodal Research Paper Companion.** Upload your papers, ask questions in plain language, and get answers grounded in what's actually in them - including the parts most "chat with your PDF" tools quietly ignore: figures, tables, and equations.
-
----
-
-## Why this exists
-
-Most tools that let you "chat with a PDF" only ever read the extracted text layer. That works fine for prose, but it means anything that actually lives in a diagram, a chart, or an equation gets silently dropped before the model ever sees it - you end up asking about a figure and getting an answer synthesized from its caption, not from the figure itself.
-
-This project was built to fix that specific gap, and it went through a real redesign to get there. The first version tried to make *every* page semantically searchable by image, embedding every rendered page through CLIP alongside the text. It worked, but it was solving a problem nobody actually has that often — in practice, people ask about figures by naming them directly ("explain the diagram on page 4"), not by vague visual similarity. So the project was rebuilt around that reality: plain text search for general questions, and a page's image is only ever rendered - on demand, then cached - the moment a question actually references it. Cheaper, faster, and closer to how the tool is actually used.
+**A multimodal Research Paper Companion.** Upload your papers, ask questions in plain language, and get answers grounded in what's actually in them — including the parts most "chat with your PDF" tools quietly ignore: figures, tables, and equations. Deployed and usable by anyone, not just locally.
 
 ---
 
-## Demo
+## Live Demo
 
-<!-- Capture these after your next run and drop them in assets/screenshots/ -->
-![Manage Documents sidebar](assets/ss_manage.png)
-![Ask a Question — chat view](assets/ss_fig.png)
+- **App:** [your Cloud Run app URL here](https://paperlens-app-569790627400.us-central1.run.app/)
+- **API docs:** [your Cloud Run api URL here](https://paperlens-api-569790627400.us-central1.run.app)/docs
+- **MCP endpoint:** [your Cloud Run api URL here](https://paperlens-api-569790627400.us-central1.run.app)/mcp — add to any MCP client (Cursor, Cline, Claude Desktop) to query your papers directly from an AI coding agent
 
-A short screen recording (upload a paper → ask a page-specific question → get a grounded answer with sources) converted to a GIF is worth more here than any amount of written description — worth doing before this goes on a resume.
+<!-- Drop a screenshot or short demo GIF here once captured -->
 
 ---
 
-## Architecture
+## Why This Exists
 
-![Architecture](assets/architecture.svg)
+Most tools that let you "chat with a PDF" only ever read the extracted text layer. That works for prose, but anything living in a diagram, chart, or equation gets silently dropped before the model ever sees it — ask about a figure, and you get an answer synthesized from its caption, not from the figure itself.
 
-Two independent paths share one knowledge base:
-
-- **No specific page mentioned** → the question is embedded and matched against stored text chunks (semantic search), and Groq's text model answers from the closest matches.
-- **A specific page is named** ("page 4", "the figure on page 12") → that exact page is rendered from the original PDF (or pulled from cache if it's been asked about before) and sent, image and all, to a vision-capable Groq model — with its "thinking mode" turned on specifically for math and structural reasoning.
+The project went through a real redesign to get this right. The first version tried to make every page semantically searchable by image, CLIP-embedding every rendered page alongside the text. It worked, but it was solving a problem that doesn't come up often — in practice, people reference figures by naming them directly ("explain the diagram on page 4"), not by vague visual similarity. So the project was rebuilt: plain text search handles general questions, and a page's image is only ever rendered — on demand, then cached — the moment a question actually references it.
 
 ---
 
 ## How It Works
 
-1. **Ingest** — every PDF page's text is extracted and embedded (`sentence-transformers`, running locally on CPU) and stored in ChromaDB. The original PDF itself is kept permanently on disk — deliberately, so a page can still be rendered on demand later, even long after upload.
-2. **Ask** — the question is checked for an explicit page/paper reference first. If found, that page gets rendered (or reused from cache) and reasoned over visually. If not, it falls back to semantic search over the stored text.
-3. **Manage** — uploaded papers can be listed and deleted at any time; deleting a paper cleans up its text entries, any cached page renders, and the original file together, not just one of the three.
-4. **Interface** — a Streamlit front end (`app.py`) talks to a FastAPI backend (`api.py`) over plain HTTP — two separate processes, the same way a real product's frontend and backend are typically split.
+**Two independent answer paths, one shared knowledge base:**
+
+- **No page named** → the question is embedded and matched against stored text chunks, and Groq's text model answers from the closest matches.
+- **A page is named explicitly** ("page 4," "the figure on page 12") → that page is rendered from the original PDF (or pulled from cache) and sent, image included, to a vision-capable Groq model — with its "thinking mode" specifically turned on for math and structural reasoning.
+- **Two or more papers are named in one question** → runs a separate, source-filtered search per paper instead of one pooled search, so a comparison question can't accidentally end up drawing all its context from just one of the papers.
+
+**Ingestion:** every PDF page's text is extracted and embedded locally (`sentence-transformers`, CPU-only) into ChromaDB. Pages with no extractable text layer (scanned documents) fall back to OCR (Tesseract) instead of being silently skipped. The original PDF is kept permanently — deliberately — so any page can still be rendered on demand, even long after upload.
+
+**Interface:** a Streamlit front end talks to a FastAPI backend over HTTP — two genuinely separate processes/containers, the way a real product's frontend and backend are split.
+
+**MCP:** the same backend logic is also exposed as an MCP (Model Context Protocol) server — reusable directly inside AI coding agents like Cursor or Cline, not just through the browser UI. Two implementations exist: a local **stdio** server (launched directly by the agent, no deployment needed, only usable on the machine it's running on) and a deployed **Streamable HTTP** server (mounted on the live backend at `/mcp`, reachable by anyone with the URL — this is the one a friend or recruiter could actually connect to without cloning anything).
+
+---
+
+## Architecture
+
+![Architecture](assets/architecture_v3.svg)
 
 ---
 
@@ -49,14 +51,17 @@ Two independent paths share one knowledge base:
 | Embeddings | `sentence-transformers` (all-MiniLM-L6-v2) |
 | Vector database | ChromaDB |
 | Generation | Groq API (text + vision models) |
+| OCR fallback | Tesseract |
 | Backend | FastAPI |
 | Frontend | Streamlit |
+| MCP | `fastmcp` (stdio + Streamable HTTP) |
 | PDF processing | PyMuPDF |
-| Containerization | Docker |
+| Containerization | Docker, Docker Compose (two-service split) |
+| Cloud | Google Cloud Run, Secret Manager |
 
 ---
 
-## Installation
+## Installation (local)
 
 Requires Python 3.10+. No GPU needed.
 
@@ -65,27 +70,31 @@ python -m venv venv
 venv\Scripts\activate      # Windows
 source venv/bin/activate   # Mac/Linux
 
-pip install -r requirements.txt
+pip install -r api_docker/requirements.txt
+pip install -r app_docker/requirements.txt
 ```
 
-Get a free Groq API key (no credit card) at https://console.groq.com/keys, then copy `.env.example` to `.env` and paste it in.
+Get a free Groq API key at https://console.groq.com/keys, and a free Hugging Face token at https://huggingface.co/settings/tokens (prevents an anonymous rate-limit error on repeated embedding-model downloads). Copy `.env.example` to `.env` and fill both in.
 
 ---
 
 ## Usage
 
-Two terminals, running at the same time:
-
+**Local, two processes:**
 ```bash
-uvicorn api:app --reload
-```
-```bash
-streamlit run app.py
+uvicorn api_docker.api:app --reload
+streamlit run app_docker/app.py
 ```
 
-`run.bat` / `start.sh` are included as shortcuts to launch both at once, if you'd rather not manage two terminals by hand.
+**Local, one command, via Docker Compose:**
+```bash
+docker compose up --build
+```
+Backend at `localhost:8000` (`/docs`, `/mcp`), frontend at `localhost:8501`.
 
-The raw API is also independently testable at `http://127.0.0.1:8000/docs`, separate from the UI.
+**MCP, locally, via Cursor/Cline:** point your agent's MCP config at `mcp_server.py` (stdio) — see `.cursor/mcp.json.example` for the shape (fill in your own paths; the real file is git-ignored, see below).
+
+**Cloud:** both services are deployed independently on Google Cloud Run, connected via an `API_URL` environment variable rather than a hardcoded address — see `docker-compose.yml` and the deploy notes in each service's folder for the exact commands.
 
 ---
 
@@ -93,48 +102,59 @@ The raw API is also independently testable at `http://127.0.0.1:8000/docs`, sepa
 
 ```
 PaperLens/
-├── rag_core.py          # embeddings, ChromaDB, the two answer paths, Groq calls
-├── page_lookup.py         # on-demand page rendering + caching
-├── ingest.py               # saves uploaded PDFs permanently, extracts + embeds text
-├── api.py                   # FastAPI backend (/ingest, /ask, /documents)
-├── app.py                     # primary UI — sidebar + chat, dark mode
-├── streamlit_app.py             # earlier tabbed UI, kept for reference
-├── requirements.txt
+├── docker-compose.yml
 ├── .env.example
-├── Dockerfile / .dockerignore     # containerizes the API
-├── HF_SPACE_README.md               # config block for Hugging Face Spaces, if deployed later
+├── .cursor/mcp.json.example
+├── mcp_server.py                # stdio MCP server (local-only, agent-launched)
+├── README.md
+│
+├── api_docker/
+│   ├── Dockerfile
+│   ├── requirements.txt
+│   ├── api.py                    # FastAPI: REST endpoints + MCP mounted at /mcp
+│   ├── ragcore.py                 # embeddings, ChromaDB, the two answer paths, Groq calls
+│   ├── multi_paper.py               # multi-paper comparison, layered on top of ragcore.py
+│   ├── ingest.py                     # saves PDFs permanently, extracts + OCRs + embeds text
+│   └── page_lookup.py                 # on-demand page rendering + caching
+│
+├── app_docker/
+│   ├── Dockerfile
+│   ├── requirements.txt
+│   └── app.py                    # Streamlit UI — sidebar + chat, dark mode
+│
 ├── assets/
-│   ├── architecture_v2.svg
-│   └── screenshots/
-└── data/
-    ├── papers/                        # permanent PDF storage
-    └── rendered_pages/                  # cached on-demand page renders
+│   └── architecture_v3.svg
+│
+└── data/                        # papers/ and rendered_pages/ -- contents git-ignored
 ```
 
 ---
 
-## A few things worth knowing about how this was built
+## A Few Things Worth Knowing About How This Was Built
 
-This wasn't a straight line from idea to finished product, and I think that's worth being upfront about rather than presenting it as if it were. A handful of real production bugs turned up along the way and got fixed one at a time — a page-lookup path that silently never fired because a function was missing its `return` statement; an inverted file-existence check that caused the opposite of the intended behavior; a `base64` encode/decode mix-up that would have crashed the very next successful run. None of them were caught by assumption — each one was traced with a small isolated test that removed every other moving part (server, UI, everything) until only the actual broken line was left standing. That process is honestly a bigger part of what this project demonstrates than any single feature is.
+This wasn't a straight line from idea to finished product, and that's worth being upfront about rather than presenting it as if it were. A real architectural pivot happened partway through — recognizing that semantic image search was solving a rare query pattern at real cost, and rebuilding around explicit page references instead. Along the way, a genuine list of production bugs turned up and got fixed one at a time: a page-lookup path that silently never fired because a function was missing its `return`; an inverted file-existence check; a `base64` encode/decode mix-up; a Docker `CMD` pointing at an absolute path instead of a relative one; a Cloud Run deploy silently landing in the wrong GCP project for a stretch of time because a default was never explicitly verified. None of these were caught by assumption — each one was traced by isolating the smallest possible reproduction and getting direct evidence before touching a fix. That process is honestly a bigger part of what this project demonstrates than any single feature is.
 
 ---
 
 ## Limitations
 
-- Text extraction relies on the PDF's built-in text layer — scanned/image-only PDFs return no text for those pages, only whatever the page-image path can work with.
-- Page-lookup requires an explicit page number *and* an identifiable paper. If more than one paper is stored and neither is named in the question, it says so directly rather than guessing.
-- Figure and table *numbers* aren't mapped to pages on their own — "explain Figure 3" only works reliably if a page number is also mentioned. Resolving figure numbers to pages automatically would need a caption-detection step during ingestion, which isn't built yet.
-- Dense tables and small print can still be misread — page images are deliberately shrunk before being sent to the model to control token cost, and that's a real trade-off against fine detail, not a fully solved problem.
-- Questions that require synthesizing across an entire document ("how many equations are in this paper") aren't a good fit for this architecture — retrieval only ever sees a handful of the most relevant chunks, never the whole document at once.
-- Runs locally, single-user, no authentication — this is a portfolio/demo project, not a multi-tenant production service.
-- Groq's available model names shift over time; if generation ever fails with a "model not found" error, it's a one-line fix in `.env`, not a code change.
+- Text extraction relies on the PDF's built-in text layer, with OCR as a fallback for scanned pages — OCR itself only recovers *text*, not diagram or table *structure*.
+- Page-lookup requires an explicit page number *and* an identifiable paper; with multiple papers stored and neither named, it asks for clarification rather than guessing.
+- Figure/table *numbers* aren't mapped to pages automatically — "explain Figure 3" only reliably works if a page number is also mentioned.
+- Retrieval is dense/semantic, which is weak at exact proper-noun or keyword lookup (a name mentioned once may not surface even when it's genuinely present) — a known trade-off of this architecture, not a bug.
+- Questions requiring synthesis across an entire document ("how many equations are in this paper," "list every heading") aren't well served by top-k retrieval, which only ever sees a handful of the most relevant chunks.
+- MCP's `ingest_paper` tool takes a local file path, not uploaded content — it can't ingest a file living on someone else's machine; adding papers happens through the Streamlit UI.
+- Free-tier cloud hosting means the backend's data can reset after extended inactivity (Cloud Run scaling to zero) — expected behavior of the hosting tier, not a bug.
 
 ---
 
 ## Future Scope
 
-- **YouTube video support.** Scoped out early to ship the PDF path first. The interesting version of this isn't just transcript search (tools like NotebookLM already do that) — it's also pulling keyframes at slide/scene changes, so on-screen equations and diagrams during a talk are searchable too, not just what was said out loud.
-- **GitHub repository linking.** A lot of papers link to an official code implementation. Being able to ask "how is the loss function in Section 3 actually implemented?" and have it search the linked repo alongside the paper itself would turn this from a reading tool into something closer to a real research workflow companion.
+- **Hybrid search** (semantic + BM25 keyword matching) to close the proper-noun/exact-term recall gap noted above.
+- **Heading extraction** via font-size metadata, answering structural questions ("list all headings") without needing an LLM call at all.
+- **YouTube video support** — not just transcript search (which existing tools already do), but keyframe extraction at slide/scene changes, so on-screen equations and diagrams during a talk are searchable too.
+- **GitHub repository linking** — many papers link an official code implementation; searching that alongside the paper itself would close the gap between "what the paper says" and "how it's actually implemented."
+- **MCP file ingestion** — accepting file content directly (not just a local path), so a remote MCP client could genuinely add a paper, not just query existing ones.
 
 ---
 
