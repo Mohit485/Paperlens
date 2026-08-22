@@ -6,9 +6,9 @@
 
 ## Live Demo
 
-- **App:** [[your Cloud Run app URL here]](https://paperlens-app-569790627400.us-central1.run.app/)
-- **API docs:** [[your Cloud Run api URL here]](https://paperlens-api-569790627400.us-central1.run.app)/docs
-- **MCP endpoint:** [[your Cloud Run api URL here]](https://paperlens-api-569790627400.us-central1.run.app)/mcp — add to any MCP client (Cursor, Cline, Claude Desktop) to query your papers directly from an AI coding agent
+- **App:** [App URL](https://paperlens-app-569790627400.us-central1.run.app/)
+- **API docs:** [API URL](https://paperlens-api-569790627400.us-central1.run.app)/docs
+- **MCP endpoint:** [MCP URL](https://paperlens-api-569790627400.us-central1.run.app)/mcp — add to any MCP client (Cursor, Cline, Claude Desktop) to query your papers directly from an AI coding agent
 
 <!-- Drop a screenshot or short demo GIF here once captured -->
 
