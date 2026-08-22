@@ -9,7 +9,8 @@
 - **App:** [App URL](https://paperlens-app-569790627400.us-central1.run.app/)
 - **API docs:** [API URL](https://paperlens-api-569790627400.us-central1.run.app)/docs
 - **MCP endpoint:** [MCP URL](https://paperlens-api-569790627400.us-central1.run.app)/mcp — add to any MCP client (Cursor, Cline, Claude Desktop) to query your papers directly from an AI coding agent
-|![Interface](assets/paper.svg) |
+
+|![Interface](assets/paper.png) |
 
 | ![Paperlens interface](assets/paper.gif) |
 
