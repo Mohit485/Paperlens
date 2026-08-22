@@ -1,0 +1,15 @@
+langchain
+langchain-community
+langchain-chroma
+chromadb
+sentence-transformers
+torch
+pillow
+pymupdf
+pytesseract
+groq
+fastapi
+uvicorn
+python-multipart
+python-dotenv
+fastmcp
