@@ -203,10 +203,10 @@ with st.sidebar:
     st.subheader("Stored papers")
 
     try:
-        documents_response = requests.get(f"{API_URL}/documents")
+        documents_response = requests.get(f"{API_URL}/documents", timeout=90)
         documents = documents_response.json().get("documents", [])
-    except requests.exceptions.ConnectionError:
-        st.error("Backend not reachable.")
+    except (requests.exceptions.ConnectionError, requests.exceptions.JSONDecodeError):
+        st.info("Backend is waking up (free-tier services sleep when idle) -- refresh in a moment.")
         documents = []
 
     if not documents:
