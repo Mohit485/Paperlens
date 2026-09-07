@@ -1,6 +1,7 @@
 import requests
 import streamlit as st
 import os
+import uuid
 
 API_URL = os.environ.get("API_URL")
 if not API_URL:
@@ -8,6 +9,7 @@ if not API_URL:
         API_URL = st.secrets["API_URL"]
     except (KeyError, FileNotFoundError):
         API_URL="http://127.0.0.1:8000"
+
 
 st.set_page_config(page_title="PaperLens", page_icon="📄", layout="wide")
 
@@ -192,7 +194,7 @@ with st.sidebar:
                 try:
                     response = requests.post(
                         f"{API_URL}/ingest",
-                        files={"file": (uploaded_file.name, uploaded_file.getvalue(), "application/pdf")},
+                        files={"file": (uploaded_file.name, uploaded_file.getvalue(), "application/pdf")}
                     )
                     if response.status_code == 200:
                         st.success(f"{uploaded_file.name} added.")
@@ -259,6 +261,9 @@ else:
 
 question = st.chat_input("Ask anything about your papers...")
 
+if "thread_id" not in st.session_state:
+    st.session_state.thread_id = str(uuid.uuid4())
+
 if question:
     with st.chat_message("user"):
         st.code(question, language=None)
@@ -266,7 +271,7 @@ if question:
     with st.chat_message("assistant"):
         with st.spinner("Thinking..."):
             try:
-                ask_response = requests.post(f"{API_URL}/ask", json={"question": question})
+                ask_response = requests.post(f"{API_URL}/ask", json={"question": question , "thread_id": st.session_state.thread_id})
                 result = ask_response.json()
                 answer = result["answer"]
                 sources = result.get("sources", [])
