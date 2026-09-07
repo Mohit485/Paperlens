@@ -1,29 +1,19 @@
 import os
+import uuid
+import json
 import base64
-from dotenv import load_dotenv
-from groq import Groq, RateLimitError, APIStatusError
-from langchain_chroma import Chroma
-from langchain_community.embeddings import HuggingFaceEmbeddings
-from PIL import Image
 import io
-import re
-from page_lookup import get_page_imageb64, paper_folder, rendered_pages
+from typing import List, Optional, TypedDict, Dict, Any, Annotated
+from page_lookup import get_page_imageb64, rendered_pages 
+import operator
+from db import get_vectorstore, lookup_object_page, list_pdf_sources, delete_pdf, get_checkpointer, reset_vectorstore
 
-load_dotenv() #load_dotenv() reads the .env file sitting in this same folder and copies its values (like GROQ_API_KEY) into the environment
-
-#The Embedding Model 
-print("Loading text embedding model...")
-embedding_fn= HuggingFaceEmbeddings(model_name= "sentence-transformers/all-MiniLM-L6-v2")
-
-
-# the Vector Database
-#ChromaDB's whole job is: store thousands of these number-lists, and when we hand it a new one, quickly tell us which stored ones are the closest match 
-chroma_dir= "chroma_db"
-vectorstore= Chroma(
-    collection_name= "research_companion",
-    embedding_function= embedding_fn,
-    persist_directory= chroma_dir #persist_directory means Chroma saves everything to a folder on disk
-)
+from groq import Groq, RateLimitError, APIStatusError
+from pydantic import BaseModel, ValidationError
+from PIL import Image
+from langgraph.graph import StateGraph, START, END
+from sqlalchemy import text
+from sqlalchemy.exc import OperationalError
 
 # Groq client
 groq_client= Groq(api_key= os.environ.get("GROQ_API_KEY"))
@@ -35,18 +25,24 @@ MAX_PAGES_PER_ANSWER = int(os.environ.get("MAX_PAGES_PER_ANSWER", 2))
 MAX_IMAGE_DIMENSION = int(os.environ.get("MAX_IMAGE_DIMENSION", 768))
 MAX_TEXT_CHUNKS = int(os.environ.get("MAX_TEXT_CHUNKS", 3))
 MAX_CHARS_PER_CHUNK = int(os.environ.get("MAX_CHARS_PER_CHUNK", 2000))
+MAX_CHUNKS_PER_PAPER = int(os.environ.get("MAX_CHUNKS_PER_PAPER", 2))  # from multi_paper.py
+
+
+def _vectorstore_call(fn):
+    """Runs fn() once; if Neon dropped the connection while idle, this
+    catches it, rebuilds the vectorstore, and retries exactly once."""
+    try:
+        return fn()
+    except OperationalError:
+        print("Stale vectorstore connection -- reconnecting...")
+        reset_vectorstore()
+        return fn()
 
 #Adding text to Knowledge base
 def add_text(text, source, page):
-    """Saves one chunk of text into the vector database.
- 
-    text   -> the actual words (e.g. everything written on one PDF page)
-    source -> which file this came from (e.g. "paper1.pdf") -- used for citing later
-    page   -> which page number, so we can point back to the exact source"""
-    vectorstore.add_texts(
-        texts=[text],
-        metadatas=[{"type": "text", "source": source, "page": str(page)}],
-    )
+    _vectorstore_call(lambda: get_vectorstore().add_texts(
+        texts=[text], metadatas=[{"source": source, "page": page, "type": "text"}], ids=[str(uuid.uuid4())],
+    ))
 
 
 def shrink_image_for_llm(base64_image, max_dimension=MAX_IMAGE_DIMENSION):
@@ -62,80 +58,131 @@ def shrink_image_for_llm(base64_image, max_dimension=MAX_IMAGE_DIMENSION):
     image.save(buffer, format="PNG")
     return base64.b64encode(buffer.getvalue()).decode("utf-8")
 
-# What Question is asking for
-"""
-    Looks for things like "page 4", "pg 4", "p. 4" in a question and
-    returns the page numbers found, e.g. [4] or [3, 5].
-    """
-def extract_page_no(questions):
-    """re.findall() scans the whole string for matches of a PATTERN. Our
-    pattern means: the word "page" (or "pg"/"p."), optional punctuation/
-    spaces, then one or more digits -- the parentheses mark the digits
-    as the part we actually want kept ("captured").
-    """
-    matches= re.findall(r"\bpage\s*(\d+)|\bpg\.?\s*(\d+)|\bp\.\s*(\d+)", questions, re.IGNORECASE)
-    page_numbers= []
-    for group in matches:
-        for value in group:
-            if value:
-                page_numbers.append(int(value))
-    return page_numbers
+# STRUCTURED-OUTPUT INTENT EXTRACTION
+class QueryIntent(BaseModel):
+    page_numbers: List[int] = []
+    paper_names: List[str] = []
+    figure_number: Optional[int] = None
+    table_number: Optional[int] = None
+    is_comparison: bool = False
+# strict:true requires every field in `required` (nullable via a
+# ["type","null"] union stands in for "optional") -- this is what
+# guarantees the model can't return a malformed shape.
+_INTENT_SCHEMA = {
+    "type": "json_schema",
+    "json_schema": {
+        "name": "query_intent",
+        "strict": True,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "page_numbers": {
+                    "type": "array", "items": {"type": "integer"},
+                    "description": "Page numbers explicitly mentioned, e.g. 'page 4' -> [4]. Empty if none.",
+                },
+                "paper_names": {
+                    "type": "array", "items": {"type": "string"},
+                    "description": "Any paper name fragments mentioned. Empty if none.",
+                },
+                "figure_number": {
+                    "type": ["integer", "null"],
+                    "description": "Figure number mentioned, e.g. 'figure 7' -> 7. null if none.",
+                },
+                "table_number": {
+                    "type": ["integer", "null"],
+                    "description": "Table number mentioned, e.g. 'table 3' -> 3. null if none.",
+                },
+                "is_comparison": {
+                    "type": "boolean",
+                    "description": "True if the question asks to compare two or more papers.",
+                },
+            },
+            "required": ["page_numbers", "paper_names", "figure_number", "table_number", "is_comparison"],
+            "additionalProperties": False,
+        },
+    },
+}
 
-def find_matching_source(questions, sources):
-    if len(sources)== 1:
+def extract_intent(question, history=None):
+    history_block = ""
+    if history:
+        recent = history[-3:]   # last few turns only -- keeps the prompt small
+        history_block = "\n".join(f"Q: {h['question']}\nA: {h['answer']}" for h in recent)
+
+    messages = [
+        {"role": "system", "content": (
+            "Extract what the user is asking for from their research-paper "
+            "question. Only fill in a field if it's actually mentioned -- "
+            "don't guess or invent values. If the question refers back to "
+            "something earlier ('that figure', 'the other paper'), use the "
+            "conversation history to resolve what it means."
+        )},
+    ]
+    if history_block:
+        messages.append({"role": "user", "content": f"Conversation so far:\n{history_block}"})
+    messages.append({"role": "user", "content": question})
+
+    try:
+        response = groq_client.chat.completions.create(
+            model=TEXT_MODEL, messages=messages, response_format=_INTENT_SCHEMA, temperature=0,
+        )
+        raw = json.loads(response.choices[0].message.content)
+        return QueryIntent(**raw)
+    except (RateLimitError, APIStatusError, json.JSONDecodeError, ValidationError):
+        return QueryIntent()
+
+def _names_match(source, name_fragment):
+    hint = source.lower().replace(".pdf", "").replace("_", " ").replace("-", " ")
+    return hint in name_fragment.lower() or name_fragment.lower() in hint
+
+
+def _resolve_single_source(intent, sources):
+    if len(sources) == 1:
         return sources[0]
-    question_lower= questions.lower()
-    for source in sources:
-        name_hint= source.lower().replace(".pdf", "").replace("_", " ").replace("-", " ")
-        if name_hint in question_lower:
-            return source
+    for name in intent.paper_names:
+        for source in sources:
+            if _names_match(source, name):
+                return source
     return None
 
 #  LOOKING UP ONE SPECIFIC PAGE'S STORED TEXT (not a similarity search)
 def get_page_text(source, page_number):
-    """
-    Unlike search() below, this doesn't ask "what's similar" -- it asks
-    "give me exactly this page," using Chroma's .get() with a metadata
-    filter instead of similarity_search(). Two different kinds of
-    lookup: exact-match vs. nearest-neighbor.
-    """
-    results= vectorstore.get(where= {"$and": [{"source": source}, {"page": str(page_number)}]})
-    documents= results.get("documents", [])
-    return documents[0] if documents else ""
+    results = _vectorstore_call(lambda: get_vectorstore().similarity_search(
+        source, k=1, filter={"source": source, "page": page_number}
+    ))
+    return results[0].page_content if results else ""
+
+def _delete_all_chunks(source):
+    def _do():
+        vectorstore = get_vectorstore()
+        matches = vectorstore.similarity_search(source, k=1000, filter={"source": source})
+        ids = [doc.id for doc in matches if doc.id]
+        if ids:
+            vectorstore.delete(ids=ids)
+    _vectorstore_call(_do)
     
 # SEMANTIC SEARCH -- the "no specific page mentioned" path
 def search(query, k=5):
-    return vectorstore.similarity_search(query, k=k)
+    return _vectorstore_call(lambda: get_vectorstore().similarity_search(query, k=k))
+
 
 # MAnage what's stored
 def list_sources():
-    if not os.path.isdir(paper_folder):
-        return []
-    return sorted(f for f in os.listdir(paper_folder) if f.lower().endswith(".pdf"))
+    return list_pdf_sources() 
 
 def delete_source(source):
-    """
-    Removes everything tied to one paper: its text entries in Chroma,
-    any cached page images, and the permanent PDF itself.
-    """
-    matches= vectorstore.get(where={"source": source})
-    matching_ids = matches.get("ids", [])
-    if matching_ids:
-        vectorstore.delete(ids=matching_ids)
- 
+    _delete_all_chunks(source)
     if os.path.isdir(rendered_pages):
         for filename in os.listdir(rendered_pages):
             if filename.startswith(f"{source}_page"):
                 os.remove(os.path.join(rendered_pages, filename))
- 
-    pdf_path = os.path.join(paper_folder, source)
-    if os.path.exists(pdf_path):
-        os.remove(pdf_path)
+    delete_pdf(source)
+
 def clear_source_text(source):
-    matches = vectorstore.get(where={"source": source})
-    matching_ids = matches.get("ids", [])
-    if matching_ids:
-        vectorstore.delete(ids=matching_ids)
+    """Called by ingest.py before re-processing a paper that's already
+    been ingested, so a re-upload replaces old chunks instead of
+    duplicating them."""
+    _delete_all_chunks(source)
 
 # 7. ASKING GROQ TO WRITE THE ANSWER
 def _call_groq(model, messages, extra_args= None):
@@ -157,6 +204,82 @@ def _call_groq(model, messages, extra_args= None):
         )
     except APIStatusError as error:
         return f"groq returned an error {error}"
+
+
+# QUERY REWRITE + RERANK
+def rewrite_query(query):
+    """One cheap Groq call turning a casual question into vocabulary
+    closer to how a paper would actually phrase it -- embeddings match
+    on wording, not just meaning, so this narrows that gap before the
+    similarity search runs."""
+    instructions = (
+        "Rewrite the following question as a concise search query, using "
+        "vocabulary likely to appear in an academic paper. Return ONLY "
+        "the rewritten query, nothing else.\n\n"
+        f"Question: {query}"
+    )
+    rewritten = _call_groq(TEXT_MODEL, [{"role": "user", "content": instructions}])
+    return rewritten.strip() if rewritten else query
+
+
+class RerankResult(BaseModel):
+    ranked_indices: List[int] = []
+
+
+_RERANK_SCHEMA = {
+    "type": "json_schema",
+    "json_schema": {
+        "name": "rerank_result",
+        "strict": True,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "ranked_indices": {
+                    "type": "array", "items": {"type": "integer"},
+                    "description": "Indices of the passages, most to least relevant to the question. Include every index exactly once.",
+                },
+            },
+            "required": ["ranked_indices"],
+            "additionalProperties": False,
+        },
+    },
+}
+
+
+def rerank_chunks(query, documents):
+    """Reorders retrieved chunks via a Groq call rather than a local
+    cross-encoder -- the deployment target only has memory budget for
+    one local model (the embedding model), so a second one isn't an
+    option here. Any failure (rate limit, wrong number of indices back)
+    just falls back to the original vector-similarity order -- reranking
+    is a quality improvement, not something the answer should break over."""
+    if len(documents) <= 1:
+        return documents
+
+    numbered = "\n\n".join(
+        f"[{i}] {doc.page_content[:MAX_CHARS_PER_CHUNK]}" for i, doc in enumerate(documents)
+    )
+    instructions = (
+        "Below are numbered passages retrieved for a question. Order their "
+        "indices from most to least relevant to the question.\n\n"
+        f"Question: {query}\n\nPassages:\n{numbered}"
+    )
+    try:
+        response = groq_client.chat.completions.create(
+            model=TEXT_MODEL,
+            messages=[{"role": "user", "content": instructions}],
+            response_format=_RERANK_SCHEMA,
+            temperature=0,
+        )
+        raw = json.loads(response.choices[0].message.content)
+        ranking = RerankResult(**raw)
+        valid = [i for i in ranking.ranked_indices if 0 <= i < len(documents)]
+        if len(valid) == len(documents):
+            return [documents[i] for i in valid]
+    except (RateLimitError, APIStatusError, json.JSONDecodeError, ValidationError):
+        pass
+    return documents
+
 
 # Path A - source context given (specific paper or page identified)
 def ask_about_pages(query, source, page_numbers):
@@ -204,6 +327,7 @@ def ask_about_pages(query, source, page_numbers):
 # PATH B -- no specific page identified
 def ask_semantic(query, k=5):
     results = search(query, k=k)
+    results = rerank_chunks(query, results)
  
     text_pieces = []
     sources = []
@@ -223,25 +347,152 @@ def ask_semantic(query, k=5):
     answer = _call_groq(TEXT_MODEL, [{"role": "user", "content": instructions}])
     return {"answer": answer, "sources": sources}
 
-# THE MAIN ENTRY POINT -- decides which path above to use
-def ask(query, k=5):
-    page_numbers = extract_page_no(query)
-    sources = list_sources()
-    print(f"[ask debug] query={query!r}  page_numbers={page_numbers}  sources={sources}")
+# Path C -- two or more papers named (merged in from multi_paper.py)
+def ask_multi_paper(query, matched_sources):
+    """Runs one FILTERED search per named paper, so every named paper
+    contributes real, guaranteed context -- not just whichever one
+    happens to score higher in a single pooled search."""
+    all_text_pieces = []
+    all_source_labels = []
+
+    for source in matched_sources:
+        results = _vectorstore_call(lambda: get_vectorstore().similarity_search(
+            query, k=MAX_CHUNKS_PER_PAPER, filter={"source": source}
+        ))
+        for doc in results:
+            meta = doc.metadata
+            all_text_pieces.append(f"[From {source}, page {meta['page']}]\n{doc.page_content[:MAX_CHARS_PER_CHUNK]}")
+            all_source_labels.append(f"{source} (page {meta['page']})")
+
+    context_text = "\n\n".join(all_text_pieces) if all_text_pieces else "(no matches found)"
+    instructions = (
+        "You are a research assistant comparing multiple papers. Answer "
+        "the question using ONLY the context below, which is drawn from "
+        f"{len(matched_sources)} different papers, each one clearly "
+        "labeled. Address each paper explicitly in your answer -- don't "
+        "blend them together. If the answer isn't there, say you don't "
+        "know instead of guessing.\n\n"
+        f"Context:\n{context_text}\n\nQuestion: {query}"
+    )
+
+    answer = _call_groq(TEXT_MODEL, [{"role": "user", "content": instructions}])
+    return {"answer": answer, "sources": all_source_labels}
+
+
+# LANGGRAPH ROUTING (step 4)
+# =======================================================================
+class GraphState(TypedDict, total=False):
+    query: str
+    k: int
+    sources: List[str]
+    intent: QueryIntent
+    route: str
+    matched_source: str
+    matched_sources: List[str]
+    page_numbers: List[int]
+    result: Dict[str, Any]
+    history: Annotated[List[Dict], operator.add]
+
+
+def classify_node(state):
+    """The one decision-making node: extract intent, resolve any
+    figure/table reference through the caption registry, resolve which
+    paper's being asked about, and decide which of the three answer
+    paths handles this. Kept as a single node rather than several tiny
+    ones -- the resolution logic below is cheap/local; only the intent
+    extraction itself is an actual API call worth isolating, and it's
+    still the one thing this node does before anything else."""
+    query = state["query"]
+    sources = state["sources"]
+    intent = extract_intent(query, history=state.get("history", []))
+
+    matched_sources = [s for s in sources for name in intent.paper_names if _names_match(s, name)]
+    # Both signals required, not just a name-count -- a genuine
+    # refinement over the old regex version, which fired on ANY 2+
+    # name matches whether or not the question was actually a comparison.
+    if intent.is_comparison and len(matched_sources) >= 2:
+        return {"intent": intent, "route": "multi_paper", "matched_sources": matched_sources}
+
+    if intent.figure_number is not None or intent.table_number is not None:
+        source = _resolve_single_source(intent, sources)
+        if source is None and len(sources) > 1:
+            return {"intent": intent, "route": "ambiguous", "page_numbers": []}
+        if source:
+            obj_type = "table" if intent.table_number is not None else "figure"
+            number = intent.table_number if intent.table_number is not None else intent.figure_number
+            page = lookup_object_page(source, obj_type, number)
+            if page is not None:
+                return {"intent": intent, "route": "page_lookup", "matched_source": source, "page_numbers": [page]}
+            # Registry never caught this caption -- fall through to semantic,
+            # same as if this feature didn't exist.
+
+    if intent.page_numbers:
+        source = _resolve_single_source(intent, sources)
+        if source is None and len(sources) > 1:
+            return {"intent": intent, "route": "ambiguous", "page_numbers": intent.page_numbers}
+        if source:
+            return {"intent": intent, "route": "page_lookup", "matched_source": source, "page_numbers": intent.page_numbers}
+
+    return {"intent": intent, "route": "semantic"}
+
+
+def ambiguous_node(state):
+    page_numbers = state.get("page_numbers") or []
+    sources = state["sources"]
     if page_numbers:
-        matched_source = find_matching_source(query, sources) 
-        print(f"[ask debug] matched_source={matched_source!r}")
-        if matched_source:
-            return ask_about_pages(query, matched_source, page_numbers)
- 
-        if len(sources) > 1:
-            return {
-                "answer": (
-                    f"You mentioned page {page_numbers[0]}, but there are "
-                    f"{len(sources)} papers stored and I can't tell which "
-                    f"one you mean. Try naming it, e.g. \"explain the "
-                    f"figure on page {page_numbers[0]} of {sources[0]}\"."
-                ),
-                "sources": [],
-            }
-    return ask_semantic(query, k=k)
+        message = (
+            f"You mentioned page {page_numbers[0]}, but there are "
+            f"{len(sources)} papers stored and I can't tell which "
+            f"one you mean. Try naming it, e.g. \"explain the "
+            f"figure on page {page_numbers[0]} of {sources[0]}\"."
+        )
+    else:
+        message = f"There are {len(sources)} papers stored and I can't tell which one you mean -- try naming it directly."
+    return {"result": {"answer": message, "sources": []}}
+
+
+def multi_paper_node(state):
+    result = ask_multi_paper(state["query"], state["matched_sources"])
+    return {"result": result, "history": [{"question": state["query"], "answer": result["answer"]}]}
+
+def page_lookup_node(state):
+    result = ask_about_pages(state["query"], state["matched_source"], state["page_numbers"])
+    return {"result": result, "history": [{"question": state["query"], "answer": result["answer"]}]}
+
+
+def semantic_node(state):
+    result = ask_semantic(state["query"], k=state.get("k", 5))
+    return {"result": result, "history": [{"question": state["query"], "answer": result["answer"]}]}
+
+
+_graph_builder = StateGraph(GraphState)
+_graph_builder.add_node("classify", classify_node)
+_graph_builder.add_node("multi_paper", multi_paper_node)
+_graph_builder.add_node("page_lookup", page_lookup_node)
+_graph_builder.add_node("semantic", semantic_node)
+_graph_builder.add_node("ambiguous", ambiguous_node)
+
+_graph_builder.add_edge(START, "classify")
+_graph_builder.add_conditional_edges(
+    "classify",
+    lambda state: state["route"],
+    {"multi_paper": "multi_paper", "page_lookup": "page_lookup", "semantic": "semantic", "ambiguous": "ambiguous"},
+)
+_graph_builder.add_edge("multi_paper", END)
+_graph_builder.add_edge("page_lookup", END)
+_graph_builder.add_edge("semantic", END)
+_graph_builder.add_edge("ambiguous", END)
+
+# compile with the checkpointer attached:
+_compiled_graph = _graph_builder.compile(checkpointer=get_checkpointer())
+
+# THE MAIN ENTRY POINT -- decides which path above to use
+def ask(query, k=5, thread_id="default"):
+    """Public entry point -- same signature and return shape api.py and
+    the MCP tool already expect. Runs the graph instead of a manual
+    if/else chain."""
+    config = {"configurable": {"thread_id": thread_id}}
+    final_state = _compiled_graph.invoke({"query": query, "k": k, "sources": list_sources()}, config=config,)
+    return final_state["result"]
+
+
