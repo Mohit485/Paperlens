@@ -19,8 +19,8 @@ services:
   - type: web
     name: paperlens-frontend
     runtime: docker
-    dockerfilePath: ./frontend/Dockerfile
-    dockerContext: ./frontend
+    dockerfilePath: ./app/Dockerfile
+    dockerContext: ./app
     plan: free
     envVars:
       - key: API_URL
