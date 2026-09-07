@@ -123,12 +123,16 @@ def extract_intent(question, history=None):
     messages.append({"role": "user", "content": question})
 
     try:
-        response = groq_client.chat.completions.create(
-            model=TEXT_MODEL, messages=messages, response_format=_INTENT_SCHEMA, temperature=0,
-        )
+        response =  groq_client.chat.completions.create(
+                                                            model=TEXT_MODEL,
+                                                            messages=messages,
+                                                            response_format=_INTENT_SCHEMA,
+                                                            temperature=0,
+                                                            reasoning_effort="low",
+                                                        )
         raw = json.loads(response.choices[0].message.content)
         return QueryIntent(**raw)
-    except (RateLimitError, APIStatusError, json.JSONDecodeError, ValidationError):
+    except (RateLimitError, APIStatusError, json.JSONDecodeError, ValidationError, TypeError):
         return QueryIntent()
 
 def _names_match(source, name_fragment):
@@ -185,23 +189,24 @@ def clear_source_text(source):
     _delete_all_chunks(source)
 
 # 7. ASKING GROQ TO WRITE THE ANSWER
-def _call_groq(model, messages, extra_args= None):
+def _call_groq(model, messages, extra_args=None):
     try:
-        response= groq_client.chat.completions.create(
-            model= model,
-            messages= messages,
-            temperature= 0.2,
-            max_tokens= 800,
+        response = groq_client.chat.completions.create(
+            model=model,
+            messages=messages,
+            temperature=0.2,
+            max_tokens=2000,   # raised from 800 -- a reasoning model needs real headroom beyond its own thinking
             **(extra_args or {}),
         )
-
-        return response.choices[0].message.content
+        content = response.choices[0].message.content
+        if not content:
+            if response.choices[0].finish_reason == "length":
+                return ("The model ran out of room to answer -- it spent its whole token "
+                        "budget reasoning before writing a response. Try a shorter question.")
+            return "The model returned an empty response. Try rephrasing the question."
+        return content
     except RateLimitError:
-        return (
-            "Groq's free-tier rate limit was hit for this request (too many "
-            "tokens sent in the last minute). Wait about a minute and try "
-            "again, or ask a narrower question."
-        )
+        return (...)
     except APIStatusError as error:
         return f"groq returned an error {error}"
 
@@ -270,13 +275,14 @@ def rerank_chunks(query, documents):
             messages=[{"role": "user", "content": instructions}],
             response_format=_RERANK_SCHEMA,
             temperature=0,
+            reasoning_effort="low",
         )
         raw = json.loads(response.choices[0].message.content)
         ranking = RerankResult(**raw)
         valid = [i for i in ranking.ranked_indices if 0 <= i < len(documents)]
         if len(valid) == len(documents):
             return [documents[i] for i in valid]
-    except (RateLimitError, APIStatusError, json.JSONDecodeError, ValidationError):
+    except (RateLimitError, APIStatusError, json.JSONDecodeError, ValidationError, TypeError):
         pass
     return documents
 
@@ -344,7 +350,7 @@ def ask_semantic(query, k=5):
         f"Context:\n{context_text}\n\nQuestion: {query}"
     )
  
-    answer = _call_groq(TEXT_MODEL, [{"role": "user", "content": instructions}])
+    answer = _call_groq(TEXT_MODEL, [{"role": "user", "content": instructions}], extra_args={"reasoning_effort": "low"})
     return {"answer": answer, "sources": sources}
 
 # Path C -- two or more papers named (merged in from multi_paper.py)
@@ -375,7 +381,7 @@ def ask_multi_paper(query, matched_sources):
         f"Context:\n{context_text}\n\nQuestion: {query}"
     )
 
-    answer = _call_groq(TEXT_MODEL, [{"role": "user", "content": instructions}])
+    answer = _call_groq(TEXT_MODEL, [{"role": "user", "content": instructions}], extra_args={"reasoning_effort": "low"})
     return {"answer": answer, "sources": all_source_labels}
 
 

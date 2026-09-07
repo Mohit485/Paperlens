@@ -41,9 +41,14 @@ def process_pdf(temp_path, original_filename):
     for page_number in range(len(doc)):
         text = doc[page_number].get_text().strip()
         if not text:
-            pixmap = doc[page_number].get_pixmap(dpi=150)
-            image = Image.open(io.BytesIO(pixmap.tobytes()))
-            text = pytesseract.image_to_string(image).strip()
+            try:
+                pixmap = doc[page_number].get_pixmap(dpi=150)
+                image = Image.open(io.BytesIO(pixmap.tobytes()))
+                text = pytesseract.image_to_string(image).strip()
+            except Exception as ocr_error:
+                print(f"[OCR debug] page {page_number + 1}: OCR FAILED -- {ocr_error}")
+                text = ""
+
             print(f"[OCR debug] page {page_number + 1}: extracted {len(text)} characters")
             print(f"[OCR debug] preview: {text[:150]!r}")
 
