@@ -1,0 +1,32 @@
+services:
+  - type: web
+    name: paperlens-api
+    runtime: docker
+    dockerfilePath: ./api/Dockerfile
+    dockerContext: ./api
+    plan: free
+    healthCheckPath: /
+    envVars:
+      - key: GROQ_API_KEY
+        sync: false
+      - key: DATABASE_URL
+        sync: false
+      - key: LANGGRAPH_STRICT_MSGPACK
+        value: "true"
+      - key: API_SHARED_TOKEN
+        generateValue: true
+
+  - type: web
+    name: paperlens-frontend
+    runtime: docker
+    dockerfilePath: ./frontend/Dockerfile
+    dockerContext: ./frontend
+    plan: free
+    envVars:
+      - key: API_URL
+        sync: false
+      - key: API_SHARED_TOKEN
+        fromService:
+          name: paperlens-api
+          type: web
+          envVarKey: API_SHARED_TOKEN

@@ -18,12 +18,14 @@ services:
       # (and survives `docker compose down`), and anything already
       # there locally is visible to the container immediately.
       - ./data:/app/data
-      - ./chroma_db:/app/chroma_db
 
   frontend:
     build: ./frontend
     ports:
       - "8501:8501"
+
+    env_file:
+      - .env
     environment: 
       # THE key line that makes two containers able to find each
       # other: "api" here is not a hostname on the real internet, it's
