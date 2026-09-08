@@ -2,8 +2,8 @@
 
 Upload a research paper, ask it questions, get answers grounded in the actual pages — not just extracted text, but the real tables, figures, and equations when that's what the question is actually about.
 
-**Try it:** [your-frontend-url.onrender.com](https://paperlens-frontend.onrender.com/)
-**MCP server (remote):** `[https://your-api-url.onrender.com/mcp](https://paperlens-api-ng2t.onrender.com)` — Streamable HTTP, works with any MCP client that supports a remote server.
+**Try it:** [https://paperlens-frontend.onrender.com/](https://paperlens-frontend.onrender.com/)
+**MCP server (remote):** [https://your-api-url.onrender.com/mcp](https://paperlens-api-ng2t.onrender.com) — Streamable HTTP, works with any MCP client that supports a remote server.
 
 Built with FastAPI, Streamlit, LangGraph, Postgres + pgvector (hosted on Neon), Groq, and Cohere.
 
