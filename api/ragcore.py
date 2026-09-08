@@ -7,7 +7,7 @@ from typing import List, Optional, TypedDict, Dict, Any, Annotated
 from page_lookup import get_page_imageb64, rendered_pages 
 import operator
 from db import get_vectorstore, lookup_object_page, list_pdf_sources, delete_pdf, get_checkpointer, reset_vectorstore
-
+from langsmith import traceable
 from groq import Groq, RateLimitError, APIStatusError
 from pydantic import BaseModel, ValidationError
 from PIL import Image
@@ -103,6 +103,7 @@ _INTENT_SCHEMA = {
     },
 }
 
+@traceable
 def extract_intent(question, history=None):
     history_block = ""
     if history:
@@ -189,6 +190,7 @@ def clear_source_text(source):
     _delete_all_chunks(source)
 
 # 7. ASKING GROQ TO WRITE THE ANSWER
+@traceable
 def _call_groq(model, messages, extra_args=None):
     try:
         response = groq_client.chat.completions.create(
@@ -288,6 +290,7 @@ def rerank_chunks(query, documents):
 
 
 # Path A - source context given (specific paper or page identified)
+@traceable
 def ask_about_pages(query, source, page_numbers):
     page_numbers= page_numbers[:MAX_PAGES_PER_ANSWER]
     context_text = "\n\n".join(get_page_text(source, p) for p in page_numbers)
@@ -331,6 +334,7 @@ def ask_about_pages(query, source, page_numbers):
 
 
 # PATH B -- no specific page identified
+@traceable
 def ask_semantic(query, k=5):
     results = search(query, k=k)
     results = rerank_chunks(query, results)
@@ -354,6 +358,7 @@ def ask_semantic(query, k=5):
     return {"answer": answer, "sources": sources}
 
 # Path C -- two or more papers named (merged in from multi_paper.py)
+@traceable
 def ask_multi_paper(query, matched_sources):
     """Runs one FILTERED search per named paper, so every named paper
     contributes real, guaranteed context -- not just whichever one
@@ -399,7 +404,7 @@ class GraphState(TypedDict, total=False):
     result: Dict[str, Any]
     history: Annotated[List[Dict], operator.add]
 
-
+@traceable
 def classify_node(state):
     """The one decision-making node: extract intent, resolve any
     figure/table reference through the caption registry, resolve which
