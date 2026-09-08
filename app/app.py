@@ -3,76 +3,41 @@ import streamlit as st
 import os
 import uuid
 import time
-from functools import wraps
 
 API_URL = os.environ.get("API_URL", "http://127.0.0.1:8000")
 
 st.set_page_config(page_title="PaperLens", page_icon="📄", layout="wide")
 
 # ---------------------------------------------------------------------------
-# RETRY LOGIC - Add this right after imports
+# API WAKE-UP LOGIC (simple, blocking, with quick check)
 # ---------------------------------------------------------------------------
-def retry_api_call(func, max_retries=5, initial_delay=5, max_delay=15):
-    """Decorator for API calls with exponential backoff"""
-    @wraps(func)
-    def wrapper(*args, **kwargs):
-        delay = initial_delay
-        last_exception = None
-        
-        for attempt in range(max_retries):
-            try:
-                return func(*args, **kwargs)
-            except (requests.exceptions.ConnectionError, 
-                    requests.exceptions.Timeout,
-                    requests.exceptions.JSONDecodeError) as e:
-                last_exception = e
-                if attempt < max_retries - 1:
-                    with st.spinner(f"Waking up the backend... (Attempt {attempt + 1}/{max_retries})"):
-                        time.sleep(delay)
-                    delay = min(delay * 2, max_delay)  # Exponential backoff
-        
-        raise last_exception
-    return wrapper
-
-@retry_api_call
-def fetch_documents():
-    """Fetch documents with retry logic"""
-    response = requests.get(f"{API_URL}/documents", timeout=30)
-    response.raise_for_status()
-    return response.json().get("documents", [])
-
-@retry_api_call
-def ingest_document(uploaded_file):
-    """Upload document with retry logic"""
-    response = requests.post(
-        f"{API_URL}/ingest",
-        files={"file": (uploaded_file.name, uploaded_file.getvalue(), "application/pdf")},
-        timeout=60
-    )
-    response.raise_for_status()
-    return response
-
-@retry_api_call
-def ask_question(question, thread_id):
-    """Ask question with retry logic"""
-    response = requests.post(
-        f"{API_URL}/ask", 
-        json={"question": question, "thread_id": thread_id},
-        timeout=60
-    )
-    response.raise_for_status()
-    return response.json()
-
-def wake_up_api():
-    """Initial API wake-up call"""
+def ensure_api_awake(max_wait_seconds=180, quick_timeout=5):
+    """Quickly check if API is awake; if not, block until it is."""
+    # Quick check first
     try:
-        requests.get(f"{API_URL}/health", timeout=10)
-        return True
-    except:
-        return False
+        r = requests.get(f"{API_URL}/health", timeout=quick_timeout)
+        if r.status_code == 200:
+            return True
+    except requests.exceptions.RequestException:
+        pass
+
+    # If not awake, show spinner and poll
+    start = time.time()
+    with st.spinner("Waking up backend service... This may take a minute."):
+        while time.time() - start < max_wait_seconds:
+            try:
+                r = requests.get(f"{API_URL}/health", timeout=10)
+                if r.status_code == 200:
+                    return True
+            except requests.exceptions.RequestException:
+                pass
+            time.sleep(5)
+    st.error("Backend service is not responding. Please try again later.")
+    st.stop()
+    return False
 
 # ---------------------------------------------------------------------------
-# CSS -- Keep your existing CSS here (unchanged)
+# CSS -- (keep your existing CSS block unchanged)
 # ---------------------------------------------------------------------------
 st.markdown(
     """
@@ -232,17 +197,9 @@ st.markdown(
 )
 
 # ---------------------------------------------------------------------------
-# INITIAL API WAKE-UP
+# WAKE UP API BEFORE DOING ANYTHING ELSE
 # ---------------------------------------------------------------------------
-if 'api_warmed_up' not in st.session_state:
-    st.session_state.api_warmed_up = False
-
-if not st.session_state.api_warmed_up:
-    with st.spinner("Connecting to backend service..."):
-        if wake_up_api():
-            st.session_state.api_warmed_up = True
-        else:
-            st.warning("Backend service is starting up. This may take a moment...")
+ensure_api_awake()
 
 # ---------------------------------------------------------------------------
 # SIDEBAR -- "Manage Documents"
@@ -261,20 +218,27 @@ with st.sidebar:
         for uploaded_file in uploaded_files:
             with st.spinner(f"Processing {uploaded_file.name}..."):
                 try:
-                    response = ingest_document(uploaded_file)
-                    st.success(f"{uploaded_file.name} added.")
-                except Exception as e:
-                    st.error(f"{uploaded_file.name} failed: {str(e)}")
+                    response = requests.post(
+                        f"{API_URL}/ingest",
+                        files={"file": (uploaded_file.name, uploaded_file.getvalue(), "application/pdf")},
+                        timeout=60
+                    )
+                    if response.status_code == 200:
+                        st.success(f"{uploaded_file.name} added.")
+                    else:
+                        st.error(f"{uploaded_file.name} failed: {response.text}")
+                except requests.exceptions.RequestException as e:
+                    st.error(f"Can't reach the backend: {e}")
                     break
 
     st.divider()
     st.subheader("Stored papers")
 
-    # Use the retry logic here
     try:
-        documents = fetch_documents()
-    except Exception as e:
-        st.info("Backend is still waking up. Please wait a moment and the documents will appear automatically.")
+        documents_response = requests.get(f"{API_URL}/documents", timeout=30)
+        documents = documents_response.json().get("documents", [])
+    except requests.exceptions.RequestException:
+        st.info("Backend is not responding. Please refresh the page.")
         documents = []
 
     if not documents:
@@ -287,7 +251,7 @@ with st.sidebar:
             try:
                 requests.delete(f"{API_URL}/documents/{doc}", timeout=30)
                 st.rerun()
-            except:
+            except requests.exceptions.RequestException:
                 st.error("Failed to delete document. Please try again.")
 
 # ---------------------------------------------------------------------------
@@ -336,14 +300,20 @@ if question:
     with st.chat_message("assistant"):
         with st.spinner("Thinking..."):
             try:
-                result = ask_question(question, st.session_state.thread_id)
-                answer = result["answer"]
-                sources = result.get("sources", [])
-
-                st.markdown(answer)
-                if sources:
-                    st.caption("Sources: " + ", ".join(sources))
-
-                st.session_state.chat_history.append((question, answer, sources))
-            except Exception as e:
-                st.error(f"Can't reach the backend. Error: {str(e)}")
+                response = requests.post(
+                    f"{API_URL}/ask",
+                    json={"question": question, "thread_id": st.session_state.thread_id},
+                    timeout=60
+                )
+                if response.status_code == 200:
+                    result = response.json()
+                    answer = result["answer"]
+                    sources = result.get("sources", [])
+                    st.markdown(answer)
+                    if sources:
+                        st.caption("Sources: " + ", ".join(sources))
+                    st.session_state.chat_history.append((question, answer, sources))
+                else:
+                    st.error(f"Backend error: {response.text}")
+            except requests.exceptions.RequestException as e:
+                st.error(f"Can't reach the backend: {e}")
