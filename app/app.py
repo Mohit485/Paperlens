@@ -278,3 +278,21 @@ if question:
                 st.session_state.chat_history.append((question, answer, sources))
             except (requests.exceptions.ConnectionError, requests.exceptions.JSONDecodeError):
                 st.error("Can't reach the backend. Is 'uvicorn api:app --reload' running?")
+
+import time
+
+def get_documents_with_retry(max_wait=90, interval=5):
+    """Same patience a person gets for free by manually opening the API's
+    own URL and just waiting -- the automatic call needs that too, or it
+    gives up long before a cold start actually finishes."""
+    start = time.time()
+    while time.time() - start < max_wait:
+        try:
+            r = requests.get(f"{API_URL}/documents", headers=HEADERS, timeout=10)
+            return r.json().get("documents", [])
+        except (requests.exceptions.ConnectionError, requests.exceptions.JSONDecodeError, requests.exceptions.Timeout):
+            time.sleep(interval)
+    return []
+
+with st.spinner("Waking up the backend -- this can take up to a minute on the first load..."):
+    documents = get_documents_with_retry()
