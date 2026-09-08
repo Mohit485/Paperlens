@@ -503,8 +503,9 @@ def ask(query, k=5, thread_id="default"):
     """Public entry point -- same signature and return shape api.py and
     the MCP tool already expect. Runs the graph instead of a manual
     if/else chain."""
+    graph = _get_compiled_graph()
     config = {"configurable": {"thread_id": thread_id}}
-    final_state = _compiled_graph.invoke({"query": query, "k": k, "sources": list_sources()}, config=config,)
+    final_state = graph.invoke({"query": query, "k": k, "sources": list_sources()}, config=config)
     return final_state["result"]
 
 
