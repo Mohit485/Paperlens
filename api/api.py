@@ -31,6 +31,10 @@ class Question(BaseModel):
 def health_check():
     return {"status": "ok", "message": "PaperLens is running"}
 
+@app.get("/health")
+def health_check():
+    return {"status": "ok"}
+
 
 @app.post("/ingest")
 async def ingest_files(file: UploadFile = File(...)):
