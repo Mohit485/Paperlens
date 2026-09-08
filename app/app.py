@@ -288,7 +288,7 @@ def get_documents_with_retry(max_wait=90, interval=5):
     start = time.time()
     while time.time() - start < max_wait:
         try:
-            r = requests.get(f"{API_URL}/documents", headers=HEADERS, timeout=10)
+            r = requests.get(f"{API_URL}/documents", timeout=10)
             return r.json().get("documents", [])
         except (requests.exceptions.ConnectionError, requests.exceptions.JSONDecodeError, requests.exceptions.Timeout):
             time.sleep(interval)
