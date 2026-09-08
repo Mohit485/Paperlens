@@ -2,15 +2,77 @@ import requests
 import streamlit as st
 import os
 import uuid
+import time
+from functools import wraps
 
-API_URL = os.environ.get("API_URL",  "http://127.0.0.1:8000")
-
+API_URL = os.environ.get("API_URL", "http://127.0.0.1:8000")
 
 st.set_page_config(page_title="PaperLens", page_icon="📄", layout="wide")
 
+# ---------------------------------------------------------------------------
+# RETRY LOGIC - Add this right after imports
+# ---------------------------------------------------------------------------
+def retry_api_call(func, max_retries=5, initial_delay=5, max_delay=15):
+    """Decorator for API calls with exponential backoff"""
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        delay = initial_delay
+        last_exception = None
+        
+        for attempt in range(max_retries):
+            try:
+                return func(*args, **kwargs)
+            except (requests.exceptions.ConnectionError, 
+                    requests.exceptions.Timeout,
+                    requests.exceptions.JSONDecodeError) as e:
+                last_exception = e
+                if attempt < max_retries - 1:
+                    with st.spinner(f"Waking up the backend... (Attempt {attempt + 1}/{max_retries})"):
+                        time.sleep(delay)
+                    delay = min(delay * 2, max_delay)  # Exponential backoff
+        
+        raise last_exception
+    return wrapper
+
+@retry_api_call
+def fetch_documents():
+    """Fetch documents with retry logic"""
+    response = requests.get(f"{API_URL}/documents", timeout=30)
+    response.raise_for_status()
+    return response.json().get("documents", [])
+
+@retry_api_call
+def ingest_document(uploaded_file):
+    """Upload document with retry logic"""
+    response = requests.post(
+        f"{API_URL}/ingest",
+        files={"file": (uploaded_file.name, uploaded_file.getvalue(), "application/pdf")},
+        timeout=60
+    )
+    response.raise_for_status()
+    return response
+
+@retry_api_call
+def ask_question(question, thread_id):
+    """Ask question with retry logic"""
+    response = requests.post(
+        f"{API_URL}/ask", 
+        json={"question": question, "thread_id": thread_id},
+        timeout=60
+    )
+    response.raise_for_status()
+    return response.json()
+
+def wake_up_api():
+    """Initial API wake-up call"""
+    try:
+        requests.get(f"{API_URL}/health", timeout=10)
+        return True
+    except:
+        return False
 
 # ---------------------------------------------------------------------------
-# CSS -- font, fixed header, centered empty-state, and dark mode
+# CSS -- Keep your existing CSS here (unchanged)
 # ---------------------------------------------------------------------------
 st.markdown(
     """
@@ -169,6 +231,18 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
+# ---------------------------------------------------------------------------
+# INITIAL API WAKE-UP
+# ---------------------------------------------------------------------------
+if 'api_warmed_up' not in st.session_state:
+    st.session_state.api_warmed_up = False
+
+if not st.session_state.api_warmed_up:
+    with st.spinner("Connecting to backend service..."):
+        if wake_up_api():
+            st.session_state.api_warmed_up = True
+        else:
+            st.warning("Backend service is starting up. This may take a moment...")
 
 # ---------------------------------------------------------------------------
 # SIDEBAR -- "Manage Documents"
@@ -187,26 +261,20 @@ with st.sidebar:
         for uploaded_file in uploaded_files:
             with st.spinner(f"Processing {uploaded_file.name}..."):
                 try:
-                    response = requests.post(
-                        f"{API_URL}/ingest",
-                        files={"file": (uploaded_file.name, uploaded_file.getvalue(), "application/pdf")}
-                    )
-                    if response.status_code == 200:
-                        st.success(f"{uploaded_file.name} added.")
-                    else:
-                        st.error(f"{uploaded_file.name} failed: {response.text}")
-                except requests.exceptions.ConnectionError:
-                    st.error("Can't reach the backend. Is 'uvicorn api:app --reload' running?")
+                    response = ingest_document(uploaded_file)
+                    st.success(f"{uploaded_file.name} added.")
+                except Exception as e:
+                    st.error(f"{uploaded_file.name} failed: {str(e)}")
                     break
 
     st.divider()
     st.subheader("Stored papers")
 
+    # Use the retry logic here
     try:
-        documents_response = requests.get(f"{API_URL}/documents", timeout=90)
-        documents = documents_response.json().get("documents", [])
-    except (requests.exceptions.ConnectionError, requests.exceptions.JSONDecodeError):
-        st.info("Backend is waking up (free-tier services sleep when idle) -- refresh in a moment.")
+        documents = fetch_documents()
+    except Exception as e:
+        st.info("Backend is still waking up. Please wait a moment and the documents will appear automatically.")
         documents = []
 
     if not documents:
@@ -216,9 +284,11 @@ with st.sidebar:
         col1, col2 = st.columns([4, 1])
         col1.write(f"📄 {doc}")
         if col2.button("🗑️", key=f"delete_{doc}"):
-            requests.delete(f"{API_URL}/documents/{doc}")
-            st.rerun()
-
+            try:
+                requests.delete(f"{API_URL}/documents/{doc}", timeout=30)
+                st.rerun()
+            except:
+                st.error("Failed to delete document. Please try again.")
 
 # ---------------------------------------------------------------------------
 # MAIN AREA -- "Ask a Question", chat-style
@@ -266,8 +336,7 @@ if question:
     with st.chat_message("assistant"):
         with st.spinner("Thinking..."):
             try:
-                ask_response = requests.post(f"{API_URL}/ask", json={"question": question , "thread_id": st.session_state.thread_id})
-                result = ask_response.json()
+                result = ask_question(question, st.session_state.thread_id)
                 answer = result["answer"]
                 sources = result.get("sources", [])
 
@@ -276,23 +345,5 @@ if question:
                     st.caption("Sources: " + ", ".join(sources))
 
                 st.session_state.chat_history.append((question, answer, sources))
-            except (requests.exceptions.ConnectionError, requests.exceptions.JSONDecodeError):
-                st.error("Can't reach the backend. Is 'uvicorn api:app --reload' running?")
-
-import time
-
-def get_documents_with_retry(max_wait=90, interval=5):
-    """Same patience a person gets for free by manually opening the API's
-    own URL and just waiting -- the automatic call needs that too, or it
-    gives up long before a cold start actually finishes."""
-    start = time.time()
-    while time.time() - start < max_wait:
-        try:
-            r = requests.get(f"{API_URL}/documents", timeout=10)
-            return r.json().get("documents", [])
-        except (requests.exceptions.ConnectionError, requests.exceptions.JSONDecodeError, requests.exceptions.Timeout):
-            time.sleep(interval)
-    return []
-
-with st.spinner("Waking up the backend -- this can take up to a minute on the first load..."):
-    documents = get_documents_with_retry()
+            except Exception as e:
+                st.error(f"Can't reach the backend. Error: {str(e)}")
