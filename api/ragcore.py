@@ -490,7 +490,13 @@ _graph_builder.add_edge("semantic", END)
 _graph_builder.add_edge("ambiguous", END)
 
 # compile with the checkpointer attached:
-_compiled_graph = _graph_builder.compile(checkpointer=get_checkpointer())
+_compiled_graph = None
+
+def _get_compiled_graph():
+    global _compiled_graph
+    if _compiled_graph is None:
+        _compiled_graph = _graph_builder.compile(checkpointer=get_checkpointer())
+    return _compiled_graph
 
 # THE MAIN ENTRY POINT -- decides which path above to use
 def ask(query, k=5, thread_id="default"):
