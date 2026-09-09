@@ -17,7 +17,7 @@ from sqlalchemy.exc import OperationalError
 
 # Groq client
 groq_client= Groq(api_key= os.environ.get("GROQ_API_KEY"))
-TEXT_MODEL = os.environ.get("GROQ_TEXT_MODEL", "openai/gpt-oss-20b")
+TEXT_MODEL = os.environ.get("GROQ_TEXT_MODEL", "llama-3.1-70b-versatile")
 VISION_MODEL = os.environ.get("GROQ_VISION_MODEL", "qwen/qwen3.6-27b")
 
 
@@ -112,12 +112,14 @@ def extract_intent(question, history=None):
 
     messages = [
         {"role": "system", "content": (
-            "Extract what the user is asking for from their research-paper "
-            "question. Only fill in a field if it's actually mentioned -- "
-            "don't guess or invent values. If the question refers back to "
-            "something earlier ('that figure', 'the other paper'), use the "
-            "conversation history to resolve what it means."
-        )},
+            "Extract what the user is asking for from their research-paper question. "
+            "IMPORTANT: If the user explicitly names a paper (e.g., 'StereoCrafter paper', "
+            "'Depth Anything paper'), you MUST put that exact name fragment in the "
+            "'paper_names' array. Do not leave it empty whenever a paper title is mentioned. "
+            "Only fill in a field if it's actually mentioned -- don't guess or invent values. "
+            "If the question refers back to something earlier ('that figure', 'the other paper'), "
+            "use the conversation history to resolve what it means."
+            )},
     ]
     if history_block:
         messages.append({"role": "user", "content": f"Conversation so far:\n{history_block}"})
@@ -428,7 +430,19 @@ def classify_node(state):
     still the one thing this node does before anything else."""
     query = state["query"]
     sources = state["sources"]
+    import re  # Make sure this is at the top of the file
+    # ... inside classify_node ...
     intent = extract_intent(query, history=state.get("history", []))
+    # --- FALLBACK: If LLM missed the paper name, try regex ---
+    if not intent.paper_names:
+        # Looks for "of the [Name] paper", "in the [Name] paper", etc.
+        match = re.search(r'(?:of|in|from)\s+the\s+([A-Za-z0-9\-\s]+?)\s+paper', query, re.IGNORECASE)
+        if match:
+            paper_hint = match.group(1).strip()
+            intent.paper_names = [paper_hint]
+            print(f"Regex fallback extracted paper name: {paper_hint}")  # For debugging
+
+    # --- Continue with the rest of the node ---
 
     matched_sources = [s for s in sources for name in intent.paper_names if _names_match(s, name)]
     # Both signals required, not just a name-count -- a genuine
