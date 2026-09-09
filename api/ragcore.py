@@ -204,7 +204,7 @@ def _call_groq(model, messages, extra_args=None):
             model=model,
             messages=messages,
             temperature=0.2,
-            max_tokens=2000,   # raised from 800 -- a reasoning model needs real headroom beyond its own thinking
+            max_tokens=2000,
             **(extra_args or {}),
         )
         content = response.choices[0].message.content
@@ -213,6 +213,13 @@ def _call_groq(model, messages, extra_args=None):
                 return ("The model ran out of room to answer -- it spent its whole token "
                         "budget reasoning before writing a response. Try a shorter question.")
             return "The model returned an empty response. Try rephrasing the question."
+
+        # Remove thinking block if present
+        if '<think>' in content and '</think>' in content:
+            content = content.split('</think>')[-1].strip()
+        elif '<think>' in content:
+            content = content.split('<think>')[0].strip()
+
         return content
     except RateLimitError:
         return (...)
@@ -335,7 +342,7 @@ def ask_about_pages(query, source, page_numbers):
     answer = _call_groq(
         VISION_MODEL,
         [{"role": "user", "content": content}],
-        extra_args={"reasoning_effort": "default"},
+        extra_args={"reasoning_effort": "low"},
     )
     return {"answer": answer, "sources": sources_used}
 
