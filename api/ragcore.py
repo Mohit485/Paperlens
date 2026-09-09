@@ -135,8 +135,9 @@ def extract_intent(question, history=None):
         return QueryIntent(**raw)
     except (RateLimitError, APIStatusError, json.JSONDecodeError, ValidationError, TypeError):
         return QueryIntent()
-import re
 
+
+import re
 def _names_match(source, name_fragment):
     def normalize(s):
         s = s.lower().replace(".pdf", "")
