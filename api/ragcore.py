@@ -222,7 +222,7 @@ def _call_groq(model, messages, extra_args=None):
 
         return content
     except RateLimitError:
-        return (...)
+        return "Groq rate limit exceeded. Please wait a moment and try again."
     except APIStatusError as error:
         return f"groq returned an error {error}"
 
