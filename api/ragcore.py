@@ -137,8 +137,17 @@ def extract_intent(question, history=None):
         return QueryIntent()
 
 def _names_match(source, name_fragment):
+    """Word-overlap match, not substring containment -- a strict
+    substring check breaks the moment the model extracts a slightly
+    different phrasing than the stored filename (e.g. "StereoCrafter
+    paper" vs a filename that's just the full title). Mirrors the same
+    approach already used for multi-paper matching, for the same
+    reason: it survives extra or reordered words."""
     hint = source.lower().replace(".pdf", "").replace("_", " ").replace("-", " ")
-    return hint in name_fragment.lower() or name_fragment.lower() in hint
+    hint_words = hint.split()
+    name_words = name_fragment.lower().split()
+    matches = sum(1 for word in name_words if word in hint_words)
+    return matches >= max(1, len(name_words) - 1)
 
 
 def _resolve_single_source(intent, sources):
