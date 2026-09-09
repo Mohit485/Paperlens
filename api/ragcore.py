@@ -342,7 +342,6 @@ def ask_about_pages(query, source, page_numbers):
     answer = _call_groq(
         VISION_MODEL,
         [{"role": "user", "content": content}],
-        extra_args={"reasoning_effort": "low"},
     )
     return {"answer": answer, "sources": sources_used}
 
