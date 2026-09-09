@@ -17,7 +17,7 @@ from sqlalchemy.exc import OperationalError
 
 # Groq client
 groq_client= Groq(api_key= os.environ.get("GROQ_API_KEY"))
-TEXT_MODEL = os.environ.get("GROQ_TEXT_MODEL", "llama-3.1-70b-versatile")
+TEXT_MODEL = os.environ.get("GROQ_TEXT_MODEL", "openai/gpt-oss-20b")
 VISION_MODEL = os.environ.get("GROQ_VISION_MODEL", "qwen/qwen3.6-27b")
 
 
