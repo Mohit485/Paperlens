@@ -92,4 +92,4 @@ From there you can just say "ingest the PDF at [path] using paperlens" and start
 - Real tracing on every model call, not just log lines.
 - A test suite and CI around the routing logic specifically — that's where the actual complexity lives.
 
-![CI](https://github.com/Mohit485/Paperlens/actions/workflow/ci.yml/badge.svg)
+![CI](https://github.com/Mohit485/Paperlens/actions/workflows/ci.yml/badge.svg)
