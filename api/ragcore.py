@@ -135,19 +135,16 @@ def extract_intent(question, history=None):
         return QueryIntent(**raw)
     except (RateLimitError, APIStatusError, json.JSONDecodeError, ValidationError, TypeError):
         return QueryIntent()
+import re
 
 def _names_match(source, name_fragment):
-    """Word-overlap match, not substring containment -- a strict
-    substring check breaks the moment the model extracts a slightly
-    different phrasing than the stored filename (e.g. "StereoCrafter
-    paper" vs a filename that's just the full title). Mirrors the same
-    approach already used for multi-paper matching, for the same
-    reason: it survives extra or reordered words."""
-    hint = source.lower().replace(".pdf", "").replace("_", " ").replace("-", " ")
-    hint_words = hint.split()
-    name_words = name_fragment.lower().split()
-    matches = sum(1 for word in name_words if word in hint_words)
-    return matches >= max(1, len(name_words) - 1)
+    def normalize(s):
+        s = s.lower().replace(".pdf", "")
+        s = re.sub(r'[^a-z0-9]', '', s)
+        return s
+    hint = normalize(source)
+    name = normalize(name_fragment)
+    return hint in name or name in hint
 
 
 def _resolve_single_source(intent, sources):
