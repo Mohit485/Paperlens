@@ -12,10 +12,13 @@ st.set_page_config(page_title="PaperLens", page_icon="📄", layout="wide")
 # ---------------------------------------------------------------------------
 # API WAKE-UP LOGIC (Browser-native JS ping)
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# API WAKE-UP LOGIC (Using st.html to replace deprecated components.html)
+# ---------------------------------------------------------------------------
 def ensure_api_awake_js(api_url):
     """
-    Triggers an HTTP ping directly from the client's browser using JavaScript.
-    This forces Render's edge router to wake up the backend instance reliably.
+    Triggers an HTTP ping directly from the client's browser using st.html.
+    Avoids st.components.v1.html deprecation warnings and iframe sandboxing issues.
     """
     if "api_is_awake" not in st.session_state:
         st.session_state.api_is_awake = False
@@ -30,33 +33,31 @@ def ensure_api_awake_js(api_url):
         except Exception:
             pass
 
-        # If not awake, run JS in browser to repeatedly hit the endpoint until Render responds 200
+        # Native JS injection via st.html (no iframe deprecation warnings)
         js_code = f"""
-        <div id="status" style="font-family: sans-serif; color: #FAFAFA; padding: 12px; background: #1B1F27; border: 1px solid #2A2F3A; border-radius: 8px;">
+        <div id="status-container" style="font-family: sans-serif; color: #FAFAFA; padding: 12px; background: #1B1F27; border: 1px solid #2A2F3A; border-radius: 8px; margin-bottom: 20px;">
             ⏳ Waking up API backend service on Render... Please wait up to 50 seconds.
         </div>
         <script>
-        async function wakeUpBackend() {{
+        (function wakeUpBackend() {{
             const healthUrl = "{api_url}/health";
-            let awake = false;
-            while (!awake) {{
+            let interval = setInterval(async () => {{
                 try {{
-                    let res = await fetch(healthUrl, {{ method: 'GET' }});
+                    let res = await fetch(healthUrl, {{ method: 'GET', mode: 'cors' }});
                     if (res.ok) {{
-                        awake = true;
-                        document.getElementById("status").innerText = "✅ Backend API is online! Reloading page...";
-                        window.parent.location.reload();
+                        clearInterval(interval);
+                        const statusDiv = document.getElementById("status-container");
+                        if (statusDiv) statusDiv.innerText = "✅ Backend API is online! Reloading...";
+                        window.location.reload();
                     }}
                 }} catch (e) {{
                     console.log("Waiting for backend cold-start...");
                 }}
-                await new Promise(r => setTimeout(r, 4000));
-            }}
-        }}
-        wakeUpBackend();
+            }}, 4000);
+        }})();
         </script>
         """
-        components.html(js_code, height=80)
+        st.html(js_code)
         st.stop()
 
 # ---------------------------------------------------------------------------
