@@ -1,50 +1,72 @@
-import requests
-import streamlit as st
 import os
 import uuid
 import time
+import requests
+import streamlit as st
+import streamlit.components.v1 as components  # Required for browser JS execution
 
 API_URL = os.environ.get("API_URL", "http://127.0.0.1:8000")
 
 st.set_page_config(page_title="PaperLens", page_icon="📄", layout="wide")
 
 # ---------------------------------------------------------------------------
-# API WAKE-UP LOGIC (simple, blocking, with quick check)
+# API WAKE-UP LOGIC (Browser-native JS ping)
 # ---------------------------------------------------------------------------
-def ensure_api_awake(max_wait_seconds=180, quick_timeout=5):
-    """Quickly check if API is awake; if not, block until it is."""
-    # Quick check first
-    try:
-        r = requests.get(f"{API_URL}/health", timeout=quick_timeout)
-        if r.status_code == 200:
-            return True
-    except requests.exceptions.RequestException:
-        pass
+def ensure_api_awake_js(api_url):
+    """
+    Triggers an HTTP ping directly from the client's browser using JavaScript.
+    This forces Render's edge router to wake up the backend instance reliably.
+    """
+    if "api_is_awake" not in st.session_state:
+        st.session_state.api_is_awake = False
 
-    # If not awake, show spinner and poll
-    start = time.time()
-    with st.spinner("Waking up backend service... This may take a minute."):
-        while time.time() - start < max_wait_seconds:
-            try:
-                r = requests.get(f"{API_URL}/health", timeout=10)
-                if r.status_code == 200:
-                    return True
-            except requests.exceptions.RequestException:
-                pass
-            time.sleep(5)
-    st.error("Backend service is not responding. Please try again later.")
-    st.stop()
-    return False
+    if not st.session_state.api_is_awake:
+        # Fast Python backend check first in case it's already awake
+        try:
+            r = requests.get(f"{api_url}/health", timeout=2)
+            if r.status_code == 200:
+                st.session_state.api_is_awake = True
+                return True
+        except Exception:
+            pass
+
+        # If not awake, run JS in browser to repeatedly hit the endpoint until Render responds 200
+        js_code = f"""
+        <div id="status" style="font-family: sans-serif; color: #FAFAFA; padding: 12px; background: #1B1F27; border: 1px solid #2A2F3A; border-radius: 8px;">
+            ⏳ Waking up API backend service on Render... Please wait up to 50 seconds.
+        </div>
+        <script>
+        async function wakeUpBackend() {{
+            const healthUrl = "{api_url}/health";
+            let awake = false;
+            while (!awake) {{
+                try {{
+                    let res = await fetch(healthUrl, {{ method: 'GET' }});
+                    if (res.ok) {{
+                        awake = true;
+                        document.getElementById("status").innerText = "✅ Backend API is online! Reloading page...";
+                        window.parent.location.reload();
+                    }}
+                }} catch (e) {{
+                    console.log("Waiting for backend cold-start...");
+                }}
+                await new Promise(r => setTimeout(r, 4000));
+            }}
+        }}
+        wakeUpBackend();
+        </script>
+        """
+        components.html(js_code, height=80)
+        st.stop()
 
 # ---------------------------------------------------------------------------
-# CSS -- (keep your existing CSS block unchanged)
+# CSS
 # ---------------------------------------------------------------------------
 st.markdown(
     """
     <style>
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
 
-    /* ---- Font: applied broadly, THEN restored for icons ---- */
     html, body, [class*="st-"], [class*="css"] {
         font-family: 'Inter', sans-serif;
     }
@@ -54,14 +76,6 @@ st.markdown(
         font-family: 'Material Symbols Outlined', 'Material Symbols Rounded', 'Material Icons' !important;
     }
 
-    /* ---- Hide Streamlit's own menu/deploy/status controls -- but NOT the
-       whole toolbar. The toolbar also contains the sidebar's "re-expand"
-       button (data-testid="stExpandSidebarButton") when the sidebar is
-       collapsed. display:none on the whole [data-testid="stToolbar"]
-       deletes that button from the DOM entirely -- no child !important
-       rule can bring back an element whose ancestor is display:none.
-       That was the actual bug: collapse the sidebar once and there is
-       nothing left to click to bring it back. ---- */
     #MainMenu,
     [data-testid="stMainMenu"],
     [data-testid="stToolbarActions"],
@@ -71,15 +85,10 @@ st.markdown(
     header[data-testid="stHeader"] {
         background: transparent;
     }
-    /* Keep the toolbar container itself intact/visible -- it's the parent
-       of the expand button, so it must never be display:none. */
     [data-testid="stToolbar"] {
         visibility: visible !important;
     }
 
-    /* ---- The actual "open sidebar" arrow (current Streamlit testid).
-       Kept a couple of legacy testids too as a harmless fallback in case
-       this runs on an older Streamlit version. ---- */
     [data-testid="stExpandSidebarButton"],
     [data-testid="stSidebarCollapsedControl"],
     [data-testid="collapsedControl"] {
@@ -95,7 +104,6 @@ st.markdown(
         color: #FAFAFA !important;
     }
 
-    /* ---- Dark mode, done directly in CSS instead of a .toml file ---- */
     .stApp {
         background-color: #0E1117;
         color: #FAFAFA;
@@ -111,13 +119,6 @@ st.markdown(
         color: #FAFAFA !important;
         border-color: #2A2F3A !important;
     }
-    /* The chip that appears after a file is selected (before "Add to
-       knowledge base" is clicked) -- this is the one part of tonight's
-       changes I can't fully verify, since Streamlit doesn't publicly
-       document this exact internal name and it's the kind of thing
-       that can shift between versions. If this doesn't visibly change
-       anything, it's safe to just delete this one rule -- nothing else
-       depends on it. */
     [data-testid="stFileUploaderFile"] {
         background-color: #DCE9FC !important;
         border-radius: 8px;
@@ -160,7 +161,6 @@ st.markdown(
         background-color: #0E1117 !important;
     }
 
-    /* ---- Fixed header, top-right ---- */
     .app-title-fixed {
         position: fixed;
         top: 1.3rem;
@@ -175,7 +175,6 @@ st.markdown(
         padding-top: 3rem;
     }
 
-    /* ---- Centered empty-state text ---- */
     .empty-state {
         text-align: center;
         color: #9CA3AF;
@@ -199,7 +198,7 @@ st.markdown(
 # ---------------------------------------------------------------------------
 # WAKE UP API BEFORE DOING ANYTHING ELSE
 # ---------------------------------------------------------------------------
-ensure_api_awake()
+ensure_api_awake_js(API_URL)
 
 # ---------------------------------------------------------------------------
 # SIDEBAR -- "Manage Documents"
