@@ -10,55 +10,40 @@ API_URL = os.environ.get("API_URL", "http://127.0.0.1:8000")
 st.set_page_config(page_title="PaperLens", page_icon="📄", layout="wide")
 
 # ---------------------------------------------------------------------------
-# API WAKE-UP LOGIC (Browser-native JS ping)
+# API WAKE-UP LOGIC (Pure Python, simple and reliable)
 # ---------------------------------------------------------------------------
-# ---------------------------------------------------------------------------
-# API WAKE-UP LOGIC (Using st.html to replace deprecated components.html)
-# ---------------------------------------------------------------------------
-def ensure_api_awake_js(api_url):
-    """
-    Triggers an HTTP ping directly from the client's browser using st.html.
-    Avoids st.components.v1.html deprecation warnings and iframe sandboxing issues.
-    """
+def ensure_api_awake(api_url):
+    """Checks backend health via Python requests and blocks until online."""
     if "api_is_awake" not in st.session_state:
         st.session_state.api_is_awake = False
 
-    if not st.session_state.api_is_awake:
-        # Fast Python backend check first in case it's already awake
-        try:
-            r = requests.get(f"{api_url}/health", timeout=2)
-            if r.status_code == 200:
-                st.session_state.api_is_awake = True
-                return True
-        except Exception:
-            pass
+    if st.session_state.api_is_awake:
+        return True
 
-        # Native JS injection via st.html (no iframe deprecation warnings)
-        js_code = f"""
-        <div id="status-container" style="font-family: sans-serif; color: #FAFAFA; padding: 12px; background: #1B1F27; border: 1px solid #2A2F3A; border-radius: 8px; margin-bottom: 20px;">
-            ⏳ Waking up API backend service on Render... Please wait up to 50 seconds.
-        </div>
-        <script>
-        (function wakeUpBackend() {{
-            const healthUrl = "{api_url}/health";
-            let interval = setInterval(async () => {{
-                try {{
-                    let res = await fetch(healthUrl, {{ method: 'GET', mode: 'cors' }});
-                    if (res.ok) {{
-                        clearInterval(interval);
-                        const statusDiv = document.getElementById("status-container");
-                        if (statusDiv) statusDiv.innerText = "✅ Backend API is online! Reloading...";
-                        window.location.reload();
-                    }}
-                }} catch (e) {{
-                    console.log("Waiting for backend cold-start...");
-                }}
-            }}, 4000);
-        }})();
-        </script>
-        """
-        st.html(js_code)
-        st.stop()
+    # 1. Quick check (2 seconds)
+    try:
+        r = requests.get(f"{api_url}/health", timeout=2)
+        if r.status_code == 200:
+            st.session_state.api_is_awake = True
+            return True
+    except requests.exceptions.RequestException:
+        pass
+
+    # 2. If asleep, show spinner and poll until awake (up to 90s)
+    with st.spinner("⏳ Waking up API backend service on Render... Please wait up to 60 seconds."):
+        start_time = time.time()
+        while time.time() - start_time < 90:
+            try:
+                r = requests.get(f"{api_url}/health", timeout=10)
+                if r.status_code == 200:
+                    st.session_state.api_is_awake = True
+                    st.rerun()
+            except requests.exceptions.RequestException:
+                pass
+            time.sleep(4)
+
+    st.error("Backend failed to wake up in time. Please refresh the page.")
+    st.stop()
 
 # ---------------------------------------------------------------------------
 # CSS
@@ -199,7 +184,7 @@ st.markdown(
 # ---------------------------------------------------------------------------
 # WAKE UP API BEFORE DOING ANYTHING ELSE
 # ---------------------------------------------------------------------------
-ensure_api_awake_js(API_URL)
+ensure_api_awake(API_URL)
 
 # ---------------------------------------------------------------------------
 # SIDEBAR -- "Manage Documents"
