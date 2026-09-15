@@ -18,7 +18,7 @@ from sqlalchemy.exc import OperationalError
 # Groq client
 groq_client= Groq(api_key= os.environ.get("GROQ_API_KEY"))
 TEXT_MODEL = os.environ.get("GROQ_TEXT_MODEL", "openai/gpt-oss-20b")
-VISION_MODEL = os.environ.get("GROQ_VISION_MODEL", "qwen/qwen3.6-27b")
+VISION_MODEL = os.environ.get("GROQ_VISION_MODEL", "qwen/qwen3.8-27b")
 
 
 MAX_PAGES_PER_ANSWER = int(os.environ.get("MAX_PAGES_PER_ANSWER", 2))
