@@ -3,9 +3,14 @@
 Upload a research paper, ask it questions, get answers grounded in the actual pages — not just extracted text, but the real tables, figures, and equations when that's what the question is actually about.
 
 **Try it:** [https://paperlens-frontend.onrender.com/](https://paperlens-frontend.onrender.com/)
+
 **MCP server (remote):** [https://your-api-url.onrender.com/mcp](https://paperlens-api-ng2t.onrender.com) — Streamable HTTP, works with any MCP client that supports a remote server.
 
 Built with FastAPI, Streamlit, LangGraph, Postgres + pgvector (hosted on Neon), Groq, and Cohere.
+
+<div align="center">
+  <img src="assets/pp_inter.png" alt="paperlens" width="75%">
+</div>
 
 ## What it actually does
 
@@ -13,8 +18,15 @@ You upload a PDF. From then on you can ask it almost anything about that paper �
 
 - **Name a figure or table** ("what does figure 4 show") and it goes straight to the right page — a small registry built while ingesting the paper maps captions to pages, so you don't need to know the page number yourself.
 - **Name a page directly**, and that page gets rendered as an image on the spot and handed to a vision model that actually looks at it. This matters more than it sounds — text extraction mangles table alignment constantly, and a model that can see the table gets it right where reading the extracted text alone wouldn't.
+<div align="center">
+  <img src="assets/psq.gif" alt="Page_specific_query" width="75%">
+</div>
 - **Ask something general**, and it searches the paper's embedded text — rewriting your question into something closer to how the paper itself would phrase it before searching, then reranking what comes back before it answers. Plain similarity search tends to find things that are *close enough*; the extra pass is there to get *actually relevant*.
 - **Name two papers**, and it searches each one on its own terms and compares them explicitly, rather than pooling everything into one search where one paper usually just drowns out the other.
+
+<div align="center">
+  <img src="assets/mpq.gif" alt="multi_paper_query" width="75%">
+</div>
 
 It also holds a conversation — ask a follow-up like "what about the next page" or "how does that compare to the other one," and it resolves that against what you actually asked a moment ago, not from scratch every time.
 
