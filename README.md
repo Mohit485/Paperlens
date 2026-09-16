@@ -36,6 +36,99 @@ Every question first goes through a small classification step that figures out w
 
 Papers, their embeddings, the figure/table registry, and conversation history all live in Postgres. There's no local database and — beyond a small disposable cache of rendered page images — nothing important sits on local disk. That's deliberate: this runs on infrastructure that doesn't promise a disk survives a restart, so anything that matters lives somewhere that does.
 
+
+## Architecture
+```mermaid
+flowchart TD
+    UI["Streamlit Web UI"]
+    LocalAgent["Cursor / Cline / Claude Desktop<br/>(local)"]
+    RemoteAgent["Remote MCP Client"]
+
+    REST["FastAPI REST API"]
+    MCPHttp["MCP Server<br/>(Streamable HTTP)"]
+    MCPStdio["MCP Server<br/>(stdio)"]
+
+    UI --> REST
+    RemoteAgent --> MCPHttp
+    LocalAgent --> MCPStdio
+
+    subgraph Ingestion["Ingestion"]
+        direction TB
+        Extract["PyMuPDF text extraction<br/>+ Tesseract OCR fallback"]
+        Captions["Figure / table caption<br/>regex extraction"]
+    end
+
+    REST --> Ingestion
+    MCPHttp --> Ingestion
+    MCPStdio --> Ingestion
+
+    subgraph Graph["LangGraph Pipeline (ragcore.py)"]
+        direction TB
+        Classify["Classify intent<br/>(Groq structured output)"]
+        Router{"Route"}
+        PageLookup["Page-Lookup Node<br/>render page + vision model"]
+        Semantic["Semantic Node<br/>rewrite → search → rerank → answer"]
+        MultiPaper["Multi-Paper Node<br/>per-paper search + compare"]
+        Ambiguous["Ambiguous Node<br/>ask to clarify"]
+
+        Classify --> Router
+        Router -->|"figure/page named"| PageLookup
+        Router -->|"general question"| Semantic
+        Router -->|"comparison intent"| MultiPaper
+        Router -->|"can't resolve paper"| Ambiguous
+    end
+
+    REST --> Graph
+    MCPHttp --> Graph
+    MCPStdio --> Graph
+
+    subgraph DB["Postgres (Neon)"]
+        direction TB
+        Docs[("PDF bytes")]
+        Vectors[("pgvector<br/>embeddings")]
+        Registry[("caption<br/>registry")]
+        Checkpoints[("conversation<br/>memory")]
+    end
+
+    Ingestion --> Docs
+    Ingestion --> Vectors
+    Captions --> Registry
+    Classify --> Registry
+    PageLookup --> Docs
+    Semantic --> Vectors
+    MultiPaper --> Vectors
+    Graph --> Checkpoints
+
+    subgraph AI["External AI Services"]
+        direction TB
+        GroqText["Groq — text & reasoning"]
+        GroqVision["Groq — vision"]
+        Cohere["Cohere — embeddings"]
+    end
+
+    Classify --> GroqText
+    Semantic --> GroqText
+    MultiPaper --> GroqText
+    PageLookup --> GroqVision
+    Ingestion --> Cohere
+
+    LangSmith["LangSmith<br/>(tracing)"]
+    Graph -.->|traces| LangSmith
+
+    classDef client fill:#e8f0fe,stroke:#4285f4,color:#1a1a1a
+    classDef entry fill:#fef7e0,stroke:#f9ab00,color:#1a1a1a
+    classDef graphNode fill:#e6f4ea,stroke:#34a853,color:#1a1a1a
+    classDef storage fill:#fce8e6,stroke:#ea4335,color:#1a1a1a
+    classDef ai fill:#f3e8fd,stroke:#a142f4,color:#1a1a1a
+
+    class UI,LocalAgent,RemoteAgent client
+    class REST,MCPHttp,MCPStdio entry
+    class Classify,Router,PageLookup,Semantic,MultiPaper,Ambiguous,Extract,Captions graphNode
+    class Docs,Vectors,Registry,Checkpoints storage
+    class GroqText,GroqVision,Cohere ai
+```
+
+
 ## Project layout
 
 ```
