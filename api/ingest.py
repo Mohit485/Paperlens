@@ -33,18 +33,21 @@ def process_pdf(temp_path, original_filename):
 
     with open(temp_path, "rb") as f:
         pdf_bytes = f.read()
-    save_pdf(original_filename, pdf_bytes)   # permanent copy now lives in Postgres
+    save_pdf(original_filename, pdf_bytes)
 
-    doc = fitz.open(stream=pdf_bytes, filetype="pdf")   # opened straight from memory, no disk round-trip
+    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
     print(f"Processing {original_filename} ({len(doc)} pages)...")
 
     for page_number in range(len(doc)):
-        text = doc[page_number].get_text().strip()
+        # Extract and sanitize page text
+        text = doc[page_number].get_text().replace("\x00", "").strip()
+        
         if not text:
             try:
                 pixmap = doc[page_number].get_pixmap(dpi=150)
                 image = Image.open(io.BytesIO(pixmap.tobytes()))
-                text = pytesseract.image_to_string(image).strip()
+                # Extract and sanitize OCR text
+                text = pytesseract.image_to_string(image).replace("\x00", "").strip()
             except Exception as ocr_error:
                 print(f"[OCR debug] page {page_number + 1}: OCR FAILED -- {ocr_error}")
                 text = ""

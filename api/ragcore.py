@@ -16,21 +16,21 @@ from sqlalchemy import text
 from sqlalchemy.exc import OperationalError
 
 # Groq client
-groq_client= Groq(api_key= os.environ.get("GROQ_API_KEY"))
-TEXT_MODEL = os.environ.get("GROQ_TEXT_MODEL", "openai/gpt-oss-20b")
-VISION_MODEL = os.environ.get("GROQ_VISION_MODEL", "qwen/qwen3.8-27b")
+groq_client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
+TEXT_MODEL = os.environ.get("GROQ_TEXT_MODEL", "llama-3.3-70b-versatile")
+VISION_MODEL = os.environ.get("GROQ_VISION_MODEL", "llama-3.2-11b-vision-preview")
 
 
 MAX_PAGES_PER_ANSWER = int(os.environ.get("MAX_PAGES_PER_ANSWER", 2))
 MAX_IMAGE_DIMENSION = int(os.environ.get("MAX_IMAGE_DIMENSION", 768))
 MAX_TEXT_CHUNKS = int(os.environ.get("MAX_TEXT_CHUNKS", 3))
 MAX_CHARS_PER_CHUNK = int(os.environ.get("MAX_CHARS_PER_CHUNK", 2000))
-MAX_CHUNKS_PER_PAPER = int(os.environ.get("MAX_CHUNKS_PER_PAPER", 2))  # from multi_paper.py
+MAX_CHUNKS_PER_PAPER = int(os.environ.get("MAX_CHUNKS_PER_PAPER", 2))
 
 
 def _vectorstore_call(fn):
-    """Runs fn() once; if Neon dropped the connection while idle, this
-    catches it, rebuilds the vectorstore, and retries exactly once."""
+    """Runs fn(); if Neon dropped the connection while idle, this
+    catches it, rebuilds the vectorstore, and retries once."""
     try:
         return fn()
     except OperationalError:
@@ -38,18 +38,18 @@ def _vectorstore_call(fn):
         reset_vectorstore()
         return fn()
 
-#Adding text to Knowledge base
-def add_text(text, source, page):
+# Adding text to Knowledge base (Sanitized against Postgres NUL byte errors)
+def add_text(text: str, source: str, page: int):
+    # Strip null bytes (0x00) that crash PostgreSQL text/varchar fields
+    clean_text = text.replace("\x00", "")
     _vectorstore_call(lambda: get_vectorstore().add_texts(
-        texts=[text], metadatas=[{"source": source, "page": page, "type": "text"}], ids=[str(uuid.uuid4())],
+        texts=[clean_text], 
+        metadatas=[{"source": source, "page": page, "type": "text"}], 
+        ids=[str(uuid.uuid4())],
     ))
 
 
 def shrink_image_for_llm(base64_image, max_dimension=MAX_IMAGE_DIMENSION):
-    """
-    Takes a base64-encoded image (as stored in Chroma) and returns a
-    smaller base64-encoded version, capped at max_dimension pixels on its
-    longest side."""
     image_bytes = base64.b64decode(base64_image)
     image = Image.open(io.BytesIO(image_bytes))
     image.thumbnail((max_dimension, max_dimension))
@@ -65,9 +65,7 @@ class QueryIntent(BaseModel):
     figure_number: Optional[int] = None
     table_number: Optional[int] = None
     is_comparison: bool = False
-# strict:true requires every field in `required` (nullable via a
-# ["type","null"] union stands in for "optional") -- this is what
-# guarantees the model can't return a malformed shape.
+
 _INTENT_SCHEMA = {
     "type": "json_schema",
     "json_schema": {
@@ -107,7 +105,7 @@ _INTENT_SCHEMA = {
 def extract_intent(question, history=None):
     history_block = ""
     if history:
-        recent = history[-3:]   # last few turns only -- keeps the prompt small
+        recent = history[-3:]
         history_block = "\n".join(f"Q: {h['question']}\nA: {h['answer']}" for h in recent)
 
     messages = [
@@ -126,13 +124,13 @@ def extract_intent(question, history=None):
     messages.append({"role": "user", "content": question})
 
     try:
-        response =  groq_client.chat.completions.create(
-                                                            model=TEXT_MODEL,
-                                                            messages=messages,
-                                                            response_format=_INTENT_SCHEMA,
-                                                            temperature=0,
-                                                            reasoning_effort="low",
-                                                        )
+        response = groq_client.chat.completions.create(
+            model=TEXT_MODEL,
+            messages=messages,
+            response_format=_INTENT_SCHEMA,
+            temperature=0,
+            reasoning_effort="low",
+        )
         raw = json.loads(response.choices[0].message.content)
         return QueryIntent(**raw)
     except (RateLimitError, APIStatusError, json.JSONDecodeError, ValidationError, TypeError):
@@ -159,7 +157,7 @@ def _resolve_single_source(intent, sources):
                 return source
     return None
 
-#  LOOKING UP ONE SPECIFIC PAGE'S STORED TEXT (not a similarity search)
+
 def get_page_text(source, page_number):
     results = _vectorstore_call(lambda: get_vectorstore().similarity_search(
         source, k=1, filter={"source": source, "page": page_number}
@@ -175,12 +173,11 @@ def _delete_all_chunks(source):
             vectorstore.delete(ids=ids)
     _vectorstore_call(_do)
     
-# SEMANTIC SEARCH -- the "no specific page mentioned" path
+
 def search(query, k=5):
     return _vectorstore_call(lambda: get_vectorstore().similarity_search(query, k=k))
 
 
-# MAnage what's stored
 def list_sources():
     return list_pdf_sources() 
 
@@ -193,12 +190,9 @@ def delete_source(source):
     delete_pdf(source)
 
 def clear_source_text(source):
-    """Called by ingest.py before re-processing a paper that's already
-    been ingested, so a re-upload replaces old chunks instead of
-    duplicating them."""
     _delete_all_chunks(source)
 
-# 7. ASKING GROQ TO WRITE THE ANSWER
+
 @traceable
 def _call_groq(model, messages, extra_args=None):
     try:
@@ -216,7 +210,6 @@ def _call_groq(model, messages, extra_args=None):
                         "budget reasoning before writing a response. Try a shorter question.")
             return "The model returned an empty response. Try rephrasing the question."
 
-        # Remove thinking block if present
         if '<think>' in content and '</think>' in content:
             content = content.split('</think>')[-1].strip()
         elif '<think>' in content:
@@ -229,12 +222,7 @@ def _call_groq(model, messages, extra_args=None):
         return f"groq returned an error {error}"
 
 
-# QUERY REWRITE + RERANK
 def rewrite_query(query):
-    """One cheap Groq call turning a casual question into vocabulary
-    closer to how a paper would actually phrase it -- embeddings match
-    on wording, not just meaning, so this narrows that gap before the
-    similarity search runs."""
     instructions = (
         "Rewrite the following question as a concise search query, using "
         "vocabulary likely to appear in an academic paper. Return ONLY "
@@ -270,12 +258,6 @@ _RERANK_SCHEMA = {
 
 
 def rerank_chunks(query, documents):
-    """Reorders retrieved chunks via a Groq call rather than a local
-    cross-encoder -- the deployment target only has memory budget for
-    one local model (the embedding model), so a second one isn't an
-    option here. Any failure (rate limit, wrong number of indices back)
-    just falls back to the original vector-similarity order -- reranking
-    is a quality improvement, not something the answer should break over."""
     if len(documents) <= 1:
         return documents
 
@@ -305,10 +287,9 @@ def rerank_chunks(query, documents):
     return documents
 
 
-# Path A - source context given (specific paper or page identified)
 @traceable
 def ask_about_pages(query, source, page_numbers):
-    page_numbers= page_numbers[:MAX_PAGES_PER_ANSWER]
+    page_numbers = page_numbers[:MAX_PAGES_PER_ANSWER]
     context_text = "\n\n".join(get_page_text(source, p) for p in page_numbers)
     instructions = (
         "You are a research assistant. Carefully examine the page "
@@ -338,9 +319,6 @@ def ask_about_pages(query, source, page_numbers):
     if not sources_used:
         return {"answer": f"I couldn't find page(s) {page_numbers} in {source}.", "sources": []}
 
-    # reasoning_effort="default" turns on this model's "thinking mode" --
-    # Groq's own docs recommend this specifically for math and complex
-    # reasoning, which is exactly what a page-lookup formula question is.
     answer = _call_groq(
         VISION_MODEL,
         [{"role": "user", "content": content}],
@@ -348,7 +326,6 @@ def ask_about_pages(query, source, page_numbers):
     return {"answer": answer, "sources": sources_used}
 
 
-# PATH B -- no specific page identified
 @traceable
 def ask_semantic(query, k=5):
     results = search(query, k=k)
@@ -372,12 +349,9 @@ def ask_semantic(query, k=5):
     answer = _call_groq(TEXT_MODEL, [{"role": "user", "content": instructions}], extra_args={"reasoning_effort": "low"})
     return {"answer": answer, "sources": sources}
 
-# Path C -- two or more papers named (merged in from multi_paper.py)
+
 @traceable
 def ask_multi_paper(query, matched_sources):
-    """Runs one FILTERED search per named paper, so every named paper
-    contributes real, guaranteed context -- not just whichever one
-    happens to score higher in a single pooled search."""
     all_text_pieces = []
     all_source_labels = []
 
@@ -405,8 +379,6 @@ def ask_multi_paper(query, matched_sources):
     return {"answer": answer, "sources": all_source_labels}
 
 
-# LANGGRAPH ROUTING (step 4)
-# =======================================================================
 class GraphState(TypedDict, total=False):
     query: str
     k: int
@@ -419,35 +391,22 @@ class GraphState(TypedDict, total=False):
     result: Dict[str, Any]
     history: Annotated[List[Dict], operator.add]
 
+
 @traceable
 def classify_node(state):
-    """The one decision-making node: extract intent, resolve any
-    figure/table reference through the caption registry, resolve which
-    paper's being asked about, and decide which of the three answer
-    paths handles this. Kept as a single node rather than several tiny
-    ones -- the resolution logic below is cheap/local; only the intent
-    extraction itself is an actual API call worth isolating, and it's
-    still the one thing this node does before anything else."""
     query = state["query"]
     sources = state["sources"]
-    import re  # Make sure this is at the top of the file
-    # ... inside classify_node ...
+    
     intent = extract_intent(query, history=state.get("history", []))
-    # --- FALLBACK: If LLM missed the paper name, try regex ---
+
     if not intent.paper_names:
-        # Looks for "of the [Name] paper", "in the [Name] paper", etc.
         match = re.search(r'(?:of|in|from)\s+the\s+([A-Za-z0-9\-\s]+?)\s+paper', query, re.IGNORECASE)
         if match:
             paper_hint = match.group(1).strip()
             intent.paper_names = [paper_hint]
-            print(f"Regex fallback extracted paper name: {paper_hint}")  # For debugging
-
-    # --- Continue with the rest of the node ---
 
     matched_sources = [s for s in sources for name in intent.paper_names if _names_match(s, name)]
-    # Both signals required, not just a name-count -- a genuine
-    # refinement over the old regex version, which fired on ANY 2+
-    # name matches whether or not the question was actually a comparison.
+    
     if intent.is_comparison and len(matched_sources) >= 2:
         return {"intent": intent, "route": "multi_paper", "matched_sources": matched_sources}
 
@@ -461,8 +420,6 @@ def classify_node(state):
             page = lookup_object_page(source, obj_type, number)
             if page is not None:
                 return {"intent": intent, "route": "page_lookup", "matched_source": source, "page_numbers": [page]}
-            # Registry never caught this caption -- fall through to semantic,
-            # same as if this feature didn't exist.
 
     if intent.page_numbers:
         source = _resolve_single_source(intent, sources)
@@ -521,7 +478,6 @@ _graph_builder.add_edge("page_lookup", END)
 _graph_builder.add_edge("semantic", END)
 _graph_builder.add_edge("ambiguous", END)
 
-# compile with the checkpointer attached:
 _compiled_graph = None
 
 def _get_compiled_graph():
@@ -530,14 +486,9 @@ def _get_compiled_graph():
         _compiled_graph = _graph_builder.compile(checkpointer=get_checkpointer())
     return _compiled_graph
 
-# THE MAIN ENTRY POINT -- decides which path above to use
+
 def ask(query, k=5, thread_id="default"):
-    """Public entry point -- same signature and return shape api.py and
-    the MCP tool already expect. Runs the graph instead of a manual
-    if/else chain."""
     graph = _get_compiled_graph()
     config = {"configurable": {"thread_id": thread_id}}
     final_state = graph.invoke({"query": query, "k": k, "sources": list_sources()}, config=config)
     return final_state["result"]
-
-
